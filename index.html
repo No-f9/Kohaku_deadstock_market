@@ -387,8 +387,9 @@
       </div>
     </div>
     <div style="margin-bottom:4px;">
-      <button class="ghost" onclick="openScanner()">📷 スマホのカメラで読み取る</button>
-      <span class="hint" style="margin-left:6px;">スマホでこのページを開くとカメラで二次元コード(GS1 DataMatrix)を読めます。</span>
+      <button class="ghost" onclick="openScanner()">📷 カメラで読み取る</button>
+      <button class="ghost" onclick="photoDirect()">🖼 写真で読み取る</button>
+      <span class="hint" style="margin-left:6px;">スマホでこのページを開くとカメラで二次元コード(GS1 DataMatrix)を読めます。小さくて読みにくい時は「写真で読み取る」が確実です。</span>
     </div>
     <div id="parsedBox" class="parsed"></div>
   </div>
@@ -575,9 +576,11 @@
   <div class="scan-hint">医薬品の箱・シートのGS1 DataMatrix(またはバーコード)を読み取ります</div>
   <div class="scan-bottom">
     <button class="torch" id="scanTorch" style="display:none;" onclick="toggleTorch()">ライト</button>
+    <button onclick="photoFromScanner()">写真で読み取る</button>
     <button onclick="closeScanner()">キャンセル</button>
   </div>
 </div>
+<input type="file" id="scanPhotoInput" accept="image/*" capture="environment" style="display:none;" onchange="handlePhoto(this)">
 
 <script>
 /* ===== アプリ内 通知/確認(サンドボックスでは alert/confirm が使えないため) ===== */
@@ -600,30 +603,62 @@ function askConfirm(msg){
 }
 
 /* ===== カメラで二次元コードを読み取る(ZXing) ===== */
-const ZXING_SRC = "https://unpkg.com/@zxing/browser@0.2.0";
-let zxingLoading = null, zxingReader = null, zxingControls = null, zxingTrack = null;
+const ZXING_LIB_SRC = "https://unpkg.com/@zxing/library@latest";
+const ZXING_BROWSER_SRC = "https://unpkg.com/@zxing/browser@0.2.0";
+let zxingLoading = null, zxingReader = null, zxingControls = null, zxingTrack = null, scanTipTimer = null;
 
+function loadScriptOnce(src){
+  return new Promise((resolve, reject)=>{
+    const sc = document.createElement("script");
+    sc.src = src;
+    sc.onload = ()=>resolve();
+    sc.onerror = ()=>reject(new Error("読み込み失敗: "+src));
+    document.head.appendChild(sc);
+  });
+}
 function loadZXing(){
   if(window.ZXingBrowser) return Promise.resolve();
   if(zxingLoading) return zxingLoading;
-  zxingLoading = new Promise((resolve, reject)=>{
-    const sc = document.createElement("script");
-    sc.src = ZXING_SRC;
-    sc.onload = ()=> window.ZXingBrowser ? resolve() : reject(new Error("ZXing未定義"));
-    sc.onerror = ()=> reject(new Error("スキャナーの読み込みに失敗"));
-    document.head.appendChild(sc);
-  });
+  zxingLoading = (async()=>{
+    // ヒント用に @zxing/library(グローバル ZXing)を先に。失敗しても数値で代替するので続行
+    try{ if(!window.ZXing) await loadScriptOnce(ZXING_LIB_SRC); }catch(e){ console.warn("library任意読込失敗", e); }
+    if(!window.ZXingBrowser) await loadScriptOnce(ZXING_BROWSER_SRC);
+    if(!window.ZXingBrowser) throw new Error("ZXing未定義");
+  })();
   return zxingLoading;
 }
 
+/* DataMatrixを優先しつつ主要フォーマットを対象に、TRY_HARDER/GS1前提を付与 */
+function buildHints(){
+  const ZL = window.ZXing, ZB = window.ZXingBrowser;
+  const DHT = (ZL && ZL.DecodeHintType) || (ZB && ZB.DecodeHintType);
+  const BF  = (ZL && ZL.BarcodeFormat)  || (ZB && ZB.BarcodeFormat);
+  const POSSIBLE_FORMATS = DHT ? DHT.POSSIBLE_FORMATS : 2;
+  const TRY_HARDER       = DHT ? DHT.TRY_HARDER       : 3;
+  const ASSUME_GS1       = DHT ? DHT.ASSUME_GS1       : 7;
+  // 医薬品で使われる形式: DataMatrix(調剤/販売包装), QR, GS1-128(CODE_128), ITF, EAN/UPC
+  const formats = BF
+    ? [BF.DATA_MATRIX, BF.QR_CODE, BF.CODE_128, BF.CODE_39, BF.ITF, BF.EAN_13, BF.EAN_8, BF.UPC_A, BF.CODABAR]
+    : [5, 11, 4, 2, 8, 7, 6, 14, 1];
+  const hints = new Map();
+  hints.set(POSSIBLE_FORMATS, formats);
+  hints.set(TRY_HARDER, true);
+  hints.set(ASSUME_GS1, true);
+  return hints;
+}
+function newReader(){
+  // (hints, delayBetweenScanSuccess, delayBetweenScanAttempts)
+  try{ return new ZXingBrowser.BrowserMultiFormatReader(buildHints(), 800, 120); }
+  catch(e){ return new ZXingBrowser.BrowserMultiFormatReader(buildHints()); }
+}
+
 async function openScanner(){
-  // 動作条件チェック
   if(!window.isSecureContext){
     toast("カメラ利用にはhttps接続が必要です(GitHub Pagesで公開後にお試しください)。","error");
     return;
   }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    toast("このブラウザはカメラに対応していません。手入力をご利用ください。","error");
+    toast("このブラウザはカメラに対応していません。「写真で読み取る」をお試しください。","error");
     return;
   }
   const bg = document.getElementById("scanBg");
@@ -634,32 +669,38 @@ async function openScanner(){
     await loadZXing();
   }catch(e){
     closeScanner();
-    toast("スキャナーの読み込みに失敗しました。通信環境をご確認ください(手入力も可能です)。","error");
+    toast("スキャナーの読み込みに失敗しました。通信環境をご確認ください(写真・手入力も可能です)。","error");
     return;
   }
   try{
-    top.textContent = "二次元コードを枠内に合わせてください";
+    top.textContent = "二次元コードを枠内に大きく映してください";
     const video = document.getElementById("scanVideo");
-    zxingReader = new ZXingBrowser.BrowserMultiFormatReader();
-    // 背面カメラを優先
-    zxingControls = await zxingReader.decodeFromConstraints(
-      { video: { facingMode: { ideal: "environment" } } },
-      video,
-      (result, err, controls)=>{
-        if(result){
-          const text = result.getText();
-          onScanned(text);
-        }
-        // err は未検出フレームごとに発生するため無視
-      }
-    );
-    // ライト(トーチ)対応端末ならボタン表示
+    zxingReader = newReader();
+    // 高解像度＋背面カメラ(小さいDataMatrixを解像するため)
+    const constraints = { video: {
+      facingMode: { ideal: "environment" },
+      width:  { ideal: 1920 },
+      height: { ideal: 1080 }
+    } };
+    zxingControls = await zxingReader.decodeFromConstraints(constraints, video, (result, err)=>{
+      if(result) onScanned(result.getText());
+    });
+    // トラック取得 → 連続オートフォーカス＆トーチ対応確認
     try{
       const stream = video.srcObject;
       zxingTrack = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
-      const caps = zxingTrack && zxingTrack.getCapabilities ? zxingTrack.getCapabilities() : {};
-      if(caps && caps.torch) document.getElementById("scanTorch").style.display = "";
+      if(zxingTrack){
+        try{ await zxingTrack.applyConstraints({ advanced: [{ focusMode: "continuous" }] }); }catch(e){}
+        const caps = zxingTrack.getCapabilities ? zxingTrack.getCapabilities() : {};
+        if(caps && caps.torch) document.getElementById("scanTorch").style.display = "";
+      }
     }catch(e){}
+    // 数秒読めなければヒントを表示
+    clearTimeout(scanTipTimer);
+    scanTipTimer = setTimeout(()=>{
+      if(document.getElementById("scanBg").classList.contains("show"))
+        top.textContent = "読みにくい時は「写真で読み取る」が確実です";
+    }, 7000);
   }catch(e){
     closeScanner();
     let msg = "カメラを起動できませんでした。";
@@ -669,13 +710,41 @@ async function openScanner(){
   }
 }
 
+/* ===== 写真(静止画)から読み取る:小さく密なコードに強い ===== */
+function photoDirect(){ document.getElementById("scanPhotoInput").click(); }
+function photoFromScanner(){ document.getElementById("scanPhotoInput").click(); }
+async function handlePhoto(input){
+  const file = input.files && input.files[0];
+  input.value = ""; // 同じ写真を選び直せるように
+  if(!file) return;
+  try{
+    await loadZXing();
+  }catch(e){
+    toast("読み取りライブラリの読み込みに失敗しました(通信環境をご確認ください)。","error");
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  try{
+    const reader = newReader();
+    const result = await reader.decodeFromImageUrl(url);
+    onScanned(result.getText());
+  }catch(e){
+    toast("写真からコードを読み取れませんでした。コードが大きく鮮明に写るよう、近すぎない距離で明るく撮影してください。","error");
+  }finally{
+    URL.revokeObjectURL(url);
+  }
+}
+
+let scanHandling = false;
 function onScanned(text){
-  // 重複呼び出し防止
-  if(!document.getElementById("scanBg").classList.contains("show")) return;
+  if(scanHandling) return;          // 連続フレームの二重処理を防止
+  if(!text) return;
+  scanHandling = true;
   if(navigator.vibrate) try{ navigator.vibrate(60); }catch(e){}
-  closeScanner();
+  closeScanner();                   // モーダルが開いていれば閉じる(写真経路では無害)
   document.getElementById("gs1input").value = text;
   parseGs1Input();
+  setTimeout(()=>{ scanHandling = false; }, 800);
 }
 
 let torchOn = false;
@@ -689,6 +758,7 @@ async function toggleTorch(){
 }
 
 function closeScanner(){
+  clearTimeout(scanTipTimer);
   try{ if(zxingControls) zxingControls.stop(); }catch(e){}
   zxingControls = null;
   const video = document.getElementById("scanVideo");
