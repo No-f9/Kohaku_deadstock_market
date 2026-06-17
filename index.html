@@ -125,6 +125,32 @@
     padding:10px 12px;font-size:13.5px;margin-bottom:12px;display:none;
   }
   .parsed.show{display:block;}
+  /* ---- カメラスキャナー ---- */
+  #scanBg{display:none;position:fixed;inset:0;background:#000;z-index:120;flex-direction:column;}
+  #scanBg.show{display:flex;}
+  #scanBg video{flex:1;width:100%;height:100%;object-fit:cover;background:#000;}
+  .scan-frame{
+    position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);
+    width:64vw;max-width:300px;aspect-ratio:1/1;
+    border:2px solid rgba(255,255,255,.9);border-radius:14px;
+    box-shadow:0 0 0 100vmax rgba(0,0,0,.45);pointer-events:none;
+  }
+  .scan-top{
+    position:absolute;top:0;left:0;right:0;padding:14px 16px;z-index:2;
+    color:#fff;font-size:14px;font-weight:600;text-align:center;
+    background:linear-gradient(rgba(0,0,0,.55),transparent);
+  }
+  .scan-bottom{
+    position:absolute;bottom:0;left:0;right:0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));z-index:2;
+    display:flex;gap:10px;justify-content:center;
+    background:linear-gradient(transparent,rgba(0,0,0,.55));
+  }
+  .scan-bottom button{
+    background:#fff;color:var(--ink);border:none;border-radius:999px;
+    padding:11px 22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;
+  }
+  .scan-bottom button.torch{background:rgba(255,255,255,.25);color:#fff;border:1px solid rgba(255,255,255,.6);}
+  .scan-hint{position:absolute;bottom:84px;left:0;right:0;text-align:center;color:#fff;font-size:12.5px;z-index:2;opacity:.9;}
   .parsed b{font-weight:700;}
 
   /* price box */
@@ -344,7 +370,7 @@
 <!-- ============ 出品登録 ============ -->
 <section id="tab-register" class="tab active">
   <div class="notice">
-    バーコードリーダー(2次元対応・キーボード接続型)でGS1コードを読み取ると、下の入力欄に文字列が入りEnterで自動解析されます。手入力やコピー&ペーストでも構いません。<br>
+    <b>スマホのカメラ</b>(下の「📷 スマホのカメラで読み取る」)か、2次元対応のバーコードリーダー(キーボード接続型)でGS1コードを読み取ると、品名・規格が自動入力されます。手入力やコピー&ペーストでも構いません。<br>
     <b id="medisStatus">医薬品マスタ読込中…</b>
   </div>
 
@@ -359,6 +385,10 @@
       <div class="w-narrow" style="align-self:flex-end;">
         <button class="primary" style="width:100%;" onclick="parseGs1Input()">解析</button>
       </div>
+    </div>
+    <div style="margin-bottom:4px;">
+      <button class="ghost" onclick="openScanner()">📷 スマホのカメラで読み取る</button>
+      <span class="hint" style="margin-left:6px;">スマホでこのページを開くとカメラで二次元コード(GS1 DataMatrix)を読めます。</span>
     </div>
     <div id="parsedBox" class="parsed"></div>
   </div>
@@ -537,6 +567,18 @@
 </div>
 <div id="toastArea"></div>
 
+<!-- ============ カメラスキャナー ============ -->
+<div id="scanBg">
+  <div class="scan-top" id="scanTop">二次元コードを枠内に合わせてください</div>
+  <video id="scanVideo" playsinline muted></video>
+  <div class="scan-frame"></div>
+  <div class="scan-hint">医薬品の箱・シートのGS1 DataMatrix(またはバーコード)を読み取ります</div>
+  <div class="scan-bottom">
+    <button class="torch" id="scanTorch" style="display:none;" onclick="toggleTorch()">ライト</button>
+    <button onclick="closeScanner()">キャンセル</button>
+  </div>
+</div>
+
 <script>
 /* ===== アプリ内 通知/確認(サンドボックスでは alert/confirm が使えないため) ===== */
 function toast(msg, type){
@@ -555,6 +597,110 @@ function askConfirm(msg){
     document.getElementById("confirmOk").onclick = ()=>done(true);
     document.getElementById("confirmCancel").onclick = ()=>done(false);
   });
+}
+
+/* ===== カメラで二次元コードを読み取る(ZXing) ===== */
+const ZXING_SRC = "https://unpkg.com/@zxing/browser@0.2.0";
+let zxingLoading = null, zxingReader = null, zxingControls = null, zxingTrack = null;
+
+function loadZXing(){
+  if(window.ZXingBrowser) return Promise.resolve();
+  if(zxingLoading) return zxingLoading;
+  zxingLoading = new Promise((resolve, reject)=>{
+    const sc = document.createElement("script");
+    sc.src = ZXING_SRC;
+    sc.onload = ()=> window.ZXingBrowser ? resolve() : reject(new Error("ZXing未定義"));
+    sc.onerror = ()=> reject(new Error("スキャナーの読み込みに失敗"));
+    document.head.appendChild(sc);
+  });
+  return zxingLoading;
+}
+
+async function openScanner(){
+  // 動作条件チェック
+  if(!window.isSecureContext){
+    toast("カメラ利用にはhttps接続が必要です(GitHub Pagesで公開後にお試しください)。","error");
+    return;
+  }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    toast("このブラウザはカメラに対応していません。手入力をご利用ください。","error");
+    return;
+  }
+  const bg = document.getElementById("scanBg");
+  const top = document.getElementById("scanTop");
+  bg.classList.add("show");
+  top.textContent = "スキャナーを準備中…";
+  try{
+    await loadZXing();
+  }catch(e){
+    closeScanner();
+    toast("スキャナーの読み込みに失敗しました。通信環境をご確認ください(手入力も可能です)。","error");
+    return;
+  }
+  try{
+    top.textContent = "二次元コードを枠内に合わせてください";
+    const video = document.getElementById("scanVideo");
+    zxingReader = new ZXingBrowser.BrowserMultiFormatReader();
+    // 背面カメラを優先
+    zxingControls = await zxingReader.decodeFromConstraints(
+      { video: { facingMode: { ideal: "environment" } } },
+      video,
+      (result, err, controls)=>{
+        if(result){
+          const text = result.getText();
+          onScanned(text);
+        }
+        // err は未検出フレームごとに発生するため無視
+      }
+    );
+    // ライト(トーチ)対応端末ならボタン表示
+    try{
+      const stream = video.srcObject;
+      zxingTrack = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+      const caps = zxingTrack && zxingTrack.getCapabilities ? zxingTrack.getCapabilities() : {};
+      if(caps && caps.torch) document.getElementById("scanTorch").style.display = "";
+    }catch(e){}
+  }catch(e){
+    closeScanner();
+    let msg = "カメラを起動できませんでした。";
+    if(e && (e.name==="NotAllowedError" || e.name==="SecurityError")) msg = "カメラの使用が許可されませんでした。ブラウザの設定で許可してください。";
+    else if(e && e.name==="NotFoundError") msg = "カメラが見つかりませんでした。";
+    toast(msg, "error");
+  }
+}
+
+function onScanned(text){
+  // 重複呼び出し防止
+  if(!document.getElementById("scanBg").classList.contains("show")) return;
+  if(navigator.vibrate) try{ navigator.vibrate(60); }catch(e){}
+  closeScanner();
+  document.getElementById("gs1input").value = text;
+  parseGs1Input();
+}
+
+let torchOn = false;
+async function toggleTorch(){
+  if(!zxingTrack) return;
+  try{
+    torchOn = !torchOn;
+    await zxingTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
+    document.getElementById("scanTorch").textContent = torchOn ? "ライト消" : "ライト";
+  }catch(e){}
+}
+
+function closeScanner(){
+  try{ if(zxingControls) zxingControls.stop(); }catch(e){}
+  zxingControls = null;
+  const video = document.getElementById("scanVideo");
+  try{
+    const stream = video.srcObject;
+    if(stream && stream.getTracks) stream.getTracks().forEach(t=>t.stop());
+  }catch(e){}
+  video.srcObject = null;
+  zxingTrack = null; torchOn = false;
+  document.getElementById("scanTorch").style.display = "none";
+  document.getElementById("scanTorch").textContent = "ライト";
+  document.getElementById("scanBg").classList.remove("show");
 }
 </script>
 
