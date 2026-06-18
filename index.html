@@ -509,10 +509,10 @@
 <section id="tab-settings" class="tab">
   <div class="card">
     <h2>組合員薬局マスタ</h2>
-    <div class="hint" style="margin-bottom:8px;">略番・略称は支払集金代行依頼書に、薬局名・所在地・開設者・許可番号は譲渡書・譲り受け書に自動記載されます。セルは直接編集できます(編集後は下の「設定を保存」)。<br>暗証番号は組合員ログイン時の本人確認用です(空欄なら暗証なしでログイン可)。</div>
+    <div class="hint" style="margin-bottom:8px;">略番・略称は支払集金代行依頼書に、薬局名・所在地・開設者・許可番号は譲渡書・譲り受け書に自動記載されます。セルは直接編集できます(編集後は下の「設定を保存」)。<br>暗証番号は組合員ログイン時の本人確認用です(空欄なら暗証なしでログイン可)。<br>LINE WORKS IDは申込・承認の通知先になります(下の「LINE WORKS通知設定」を参照)。</div>
     <div style="overflow-x:auto;">
     <table class="settings" id="pharmacyTable">
-      <thead><tr><th style="width:60px">略番</th><th style="width:90px">略称</th><th>薬局名</th><th>開設者</th><th>許可番号</th><th>所在地</th><th style="width:84px">暗証番号</th><th style="width:56px"></th></tr></thead>
+      <thead><tr><th style="width:60px">略番</th><th style="width:90px">略称</th><th>薬局名</th><th>開設者</th><th>許可番号</th><th>所在地</th><th style="width:84px">暗証番号</th><th style="width:150px">LINE WORKS ID</th><th style="width:56px"></th></tr></thead>
       <tbody></tbody>
     </table>
     </div>
@@ -524,6 +524,7 @@
       <div><input type="text" id="newPhLicense" placeholder="許可番号"></div>
       <div><input type="text" id="newPhAddr" placeholder="所在地"></div>
       <div class="w-narrow"><input type="text" id="newPhPin" placeholder="暗証(任意)"></div>
+      <div><input type="text" id="newPhLwid" placeholder="LINE WORKS ID"></div>
       <div class="w-narrow"><button class="ghost" style="width:100%;" onclick="addPharmacy()">追加</button></div>
     </div>
   </div>
@@ -548,6 +549,31 @@
         <input type="text" id="adminPinInput" onchange="config.adminPin=this.value.trim()">
       </div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>LINE WORKS通知設定</h2>
+    <div class="hint" style="margin-bottom:10px;">譲受の<b>申込</b>時は出品薬局へ、<b>承認(譲渡決定)</b>時は譲受薬局へ、LINE WORKSで自動通知します。送信には中継スクリプト(GAS)のURLが必要です。各薬局のLINE WORKS IDは上の組合員薬局マスタに登録してください。設定変更後は「設定を保存」を押してください。</div>
+    <div class="row" style="margin-bottom:8px;">
+      <label style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="notifyOn" style="width:18px;height:18px;accent-color:var(--beni);" onchange="config.notifyOn=this.checked">
+        <span>通知を有効にする</span>
+      </label>
+    </div>
+    <div class="row">
+      <div style="flex:1 1 100%;">
+        <label for="notifyUrl">GAS中継URL</label>
+        <input type="text" id="notifyUrl" placeholder="https://script.google.com/macros/s/.../exec" onchange="config.notifyUrl=this.value.trim()">
+      </div>
+    </div>
+    <div class="row" style="align-items:flex-end;">
+      <div class="w-narrow">
+        <label for="notifyToken">合言葉(任意)</label>
+        <input type="text" id="notifyToken" placeholder="GAS側と同じ文字列" onchange="config.notifyToken=this.value.trim()">
+      </div>
+      <div style="flex:0 0 auto;"><button class="ghost" onclick="testNotify()">テスト送信</button></div>
+    </div>
+    <div style="margin-top:12px;"><button class="primary" onclick="saveSettings()">設定を保存</button></div>
   </div>
 </section>
 
@@ -614,6 +640,105 @@ function askConfirm(msg){
 const ZXING_LIB_SRC = "https://unpkg.com/@zxing/library@latest";
 const ZXING_BROWSER_SRC = "https://unpkg.com/@zxing/browser@0.2.0";
 let zxingLoading = null, zxingReader = null, zxingControls = null, zxingTrack = null, scanTipTimer = null;
+let scanStream = null, nativeDetector = null, nativeScanTimer = null, scanMode = null;
+/* 端末標準の BarcodeDetector が data_matrix 対応なら優先(ZXingより高精度) */
+async function getNativeDetector(){
+  try{
+    if(!("BarcodeDetector" in window)) return null;
+    const fmts = await window.BarcodeDetector.getSupportedFormats();
+    if(!fmts || fmts.indexOf("data_matrix")===-1) return null;
+    const want = ["data_matrix","qr_code","code_128","code_39","itf","ean_13","ean_8","upc_a","upc_e","codabar"].filter(f=>fmts.indexOf(f)!==-1);
+    return new window.BarcodeDetector({ formats: want });
+  }catch(e){ return null; }
+}
+function setupScanTrack(stream){
+  zxingTrack = (stream && stream.getVideoTracks) ? stream.getVideoTracks()[0] : null;
+  if(zxingTrack){
+    try{ zxingTrack.applyConstraints({ advanced: [{ focusMode: "continuous" }] }); }catch(e){}
+    const caps = zxingTrack.getCapabilities ? zxingTrack.getCapabilities() : {};
+    if(caps && caps.torch) document.getElementById("scanTorch").style.display = "";
+  }
+}
+function startNativeLoop(video){
+  let busy = false;
+  const tick = async ()=>{
+    if(!document.getElementById("scanBg").classList.contains("show")) return;
+    if(!busy && video.readyState >= 2){
+      busy = true;
+      try{
+        const codes = await nativeDetector.detect(video);
+        if(codes && codes.length){
+          const v = codes[0].rawValue || "";
+          if(v){ onScanned(v); return; }
+        }
+      }catch(e){}
+      busy = false;
+    }
+    nativeScanTimer = setTimeout(tick, 150);
+  };
+  tick();
+}
+
+async function startVideoStream(video, constraints){
+  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  scanStream = stream;
+  video.srcObject = stream;
+  video.muted = true; video.setAttribute("playsinline","");
+  await video.play().catch(()=>{});
+  setupScanTrack(stream);
+  return stream;
+}
+
+/* ===== ZXing-C++(WASM):iOS Safari等でもDataMatrixを高精度に読む ===== */
+const ZXWASM_JS   = "https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.0/dist/iife/reader/index.js";
+const ZXWASM_WASM = "https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.0/dist/reader/zxing_reader.wasm";
+const READ_FORMATS = ["DataMatrix","QRCode","Code128","Code39","ITF","EAN13","EAN8","UPCA","UPCE","Codabar"];
+const READ_OPTS = { formats: READ_FORMATS, tryHarder:true, tryInvert:true, tryDownscale:true, textMode:"Plain", maxNumberOfSymbols:1 };
+let zxwasmLoading = null;
+function loadZXingWasm(){
+  if(window.ZXingWASM && window.__zxwasmReady) return Promise.resolve(true);
+  if(zxwasmLoading) return zxwasmLoading;
+  zxwasmLoading = (async()=>{
+    if(!window.ZXingWASM) await loadScriptOnce(ZXWASM_JS);
+    if(!window.ZXingWASM) throw new Error("ZXingWASM未定義");
+    try{ window.ZXingWASM.setZXingModuleOverrides({ locateFile:(p)=> (p && p.endsWith(".wasm")) ? ZXWASM_WASM : p }); }catch(e){}
+    await window.ZXingWASM.getZXingModule();   // wasmを事前ロード
+    window.__zxwasmReady = true;
+    return true;
+  })().catch(err=>{ zxwasmLoading = null; throw err; });
+  return zxwasmLoading;
+}
+async function wasmDecode(input){
+  const res = await window.ZXingWASM.readBarcodes(input, READ_OPTS);
+  if(res && res.length){ for(const r of res){ if(r.isValid && r.text) return r.text; } }
+  return null;
+}
+function wasmDecodeBlob(blob){ return wasmDecode(blob); }
+function startWasmLoop(video){
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently:true });
+  let busy = false;
+  const tick = async ()=>{
+    if(!document.getElementById("scanBg").classList.contains("show")) return;
+    if(!busy && video.readyState >= 2 && video.videoWidth){
+      busy = true;
+      try{
+        const vw = video.videoWidth, vh = video.videoHeight;
+        const side = Math.floor(Math.min(vw, vh) * 0.7);   // 中央70%の正方形ROI(小さいコード対策)
+        const sx = Math.floor((vw - side)/2), sy = Math.floor((vh - side)/2);
+        const out = Math.min(side, 800);
+        canvas.width = out; canvas.height = out;
+        ctx.drawImage(video, sx, sy, side, side, 0, 0, out, out);
+        const img = ctx.getImageData(0, 0, out, out);
+        const text = await wasmDecode(img);
+        if(text){ onScanned(text); return; }
+      }catch(e){}
+      busy = false;
+    }
+    nativeScanTimer = setTimeout(tick, 200);
+  };
+  tick();
+}
 
 function loadScriptOnce(src){
   return new Promise((resolve, reject)=>{
@@ -673,36 +798,40 @@ async function openScanner(){
   const top = document.getElementById("scanTop");
   bg.classList.add("show");
   top.textContent = "スキャナーを準備中…";
+  const video = document.getElementById("scanVideo");
+  // 高解像度＋背面カメラ(小さいDataMatrixを解像するため)
+  const constraints = { video: {
+    facingMode: { ideal: "environment" },
+    width:  { ideal: 1920 },
+    height: { ideal: 1080 }
+  }, audio:false };
   try{
-    await loadZXing();
-  }catch(e){
-    closeScanner();
-    toast("スキャナーの読み込みに失敗しました。通信環境をご確認ください(写真・手入力も可能です)。","error");
-    return;
-  }
-  try{
-    top.textContent = "二次元コードを枠内に大きく映してください";
-    const video = document.getElementById("scanVideo");
-    zxingReader = newReader();
-    // 高解像度＋背面カメラ(小さいDataMatrixを解像するため)
-    const constraints = { video: {
-      facingMode: { ideal: "environment" },
-      width:  { ideal: 1920 },
-      height: { ideal: 1080 }
-    } };
-    zxingControls = await zxingReader.decodeFromConstraints(constraints, video, (result, err)=>{
-      if(result) onScanned(result.getText());
-    });
-    // トラック取得 → 連続オートフォーカス＆トーチ対応確認
-    try{
-      const stream = video.srcObject;
-      zxingTrack = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
-      if(zxingTrack){
-        try{ await zxingTrack.applyConstraints({ advanced: [{ focusMode: "continuous" }] }); }catch(e){}
-        const caps = zxingTrack.getCapabilities ? zxingTrack.getCapabilities() : {};
-        if(caps && caps.torch) document.getElementById("scanTorch").style.display = "";
-      }
-    }catch(e){}
+    nativeDetector = await getNativeDetector();
+    let wasmOk = false;
+    if(!nativeDetector){ wasmOk = await loadZXingWasm().then(()=>true).catch(()=>false); }
+    if(nativeDetector){
+      // --- ① 端末標準デコーダ(Android系・DataMatrix高精度) ---
+      scanMode = "native";
+      await startVideoStream(video, constraints);
+      top.textContent = "コードを枠内に大きく映してください(データマトリックス対応)";
+      startNativeLoop(video);
+    }else if(wasmOk){
+      // --- ② ZXing-C++(WASM):iPhone/Safari等でもDataMatrix対応 ---
+      scanMode = "wasm";
+      await startVideoStream(video, constraints);
+      top.textContent = "コードを枠内に大きく映してください(データマトリックス対応)";
+      startWasmLoop(video);
+    }else{
+      // --- ③ 最終フォールバック: ZXing(JS) ---
+      scanMode = "zxing";
+      await loadZXing();
+      top.textContent = "二次元コードを枠内に大きく映してください";
+      zxingReader = newReader();
+      zxingControls = await zxingReader.decodeFromConstraints(constraints, video, (result, err)=>{
+        if(result) onScanned(result.getText());
+      });
+      try{ setupScanTrack(video.srcObject); }catch(e){}
+    }
     // 数秒読めなければヒントを表示
     clearTimeout(scanTipTimer);
     scanTipTimer = setTimeout(()=>{
@@ -714,6 +843,7 @@ async function openScanner(){
     let msg = "カメラを起動できませんでした。";
     if(e && (e.name==="NotAllowedError" || e.name==="SecurityError")) msg = "カメラの使用が許可されませんでした。ブラウザの設定で許可してください。";
     else if(e && e.name==="NotFoundError") msg = "カメラが見つかりませんでした。";
+    else if(scanMode==="zxing") msg = "スキャナーの読み込みに失敗しました。通信環境をご確認ください(写真・手入力も可能です)。";
     toast(msg, "error");
   }
 }
@@ -725,6 +855,23 @@ async function handlePhoto(input){
   const file = input.files && input.files[0];
   input.value = ""; // 同じ写真を選び直せるように
   if(!file) return;
+  // 1) 端末標準デコーダ優先(DataMatrixに強い)
+  try{
+    const det = await getNativeDetector();
+    if(det){
+      const bmp = await createImageBitmap(file);
+      const codes = await det.detect(bmp);
+      try{ bmp.close && bmp.close(); }catch(e){}
+      if(codes && codes.length && codes[0].rawValue){ onScanned(codes[0].rawValue); return; }
+    }
+  }catch(e){ /* 次のエンジンへ */ }
+  // 2) ZXing-C++(WASM):iPhone等でもDataMatrixに強い
+  try{
+    await loadZXingWasm();
+    const t = await wasmDecodeBlob(file);
+    if(t){ onScanned(t); return; }
+  }catch(e){ /* 次のエンジンへ */ }
+  // 3) 最終フォールバック: ZXing(JS)
   try{
     await loadZXing();
   }catch(e){
@@ -767,14 +914,16 @@ async function toggleTorch(){
 
 function closeScanner(){
   clearTimeout(scanTipTimer);
+  clearTimeout(nativeScanTimer); nativeScanTimer = null;
   try{ if(zxingControls) zxingControls.stop(); }catch(e){}
   zxingControls = null;
   const video = document.getElementById("scanVideo");
   try{
-    const stream = video.srcObject;
+    const stream = video.srcObject || scanStream;
     if(stream && stream.getTracks) stream.getTracks().forEach(t=>t.stop());
   }catch(e){}
   video.srcObject = null;
+  scanStream = null; nativeDetector = null; scanMode = null;
   zxingTrack = null; torchOn = false;
   document.getElementById("scanTorch").style.display = "none";
   document.getElementById("scanTorch").textContent = "ライト";
@@ -965,9 +1114,12 @@ async function saveListings(){ scheduleSave(); }
 function init(){
   // 旧形式データの移行(略番・略称・開設者の欄を補完)
   config.pharmacies = (config.pharmacies||[]).map(p=>({
-    no:p.no||"", abbr:p.abbr||"", name:p.name||"", owner:p.owner||"", license:p.license||"", addr:p.addr||"", pin:p.pin||""
+    no:p.no||"", abbr:p.abbr||"", name:p.name||"", owner:p.owner||"", license:p.license||"", addr:p.addr||"", pin:p.pin||"", lwid:p.lwid||""
   }));
   if(config.adminPin===undefined) config.adminPin = "0000";
+  if(config.notifyOn===undefined) config.notifyOn = false;
+  if(config.notifyUrl===undefined) config.notifyUrl = "";
+  if(config.notifyToken===undefined) config.notifyToken = "";
   renderSellerSelect();
   renderSettings();
   renderListings();
@@ -1368,6 +1520,13 @@ async function runBatch(){
     selectedIds.clear();
     await saveListings();
     renderListings();
+    const bySeller2 = {};
+    items.forEach(x=>{ (bySeller2[x.seller]=bySeller2[x.seller]||[]).push(x); });
+    Object.keys(bySeller2).forEach(seller=>{
+      const list = bySeller2[seller];
+      const names = list.map(x=>`「${x.name}${spOf(x)}」`).join("、");
+      pushNotify(seller, `【不動在庫マーケット】\n${seller} 様\n${currentUser.pharmacy} から ${list.length}件の譲受申込が入りました。\n${names}\nアプリで承認してください。`);
+    });
     toast(`${items.length}件を申し込みました。出品薬局の承認をお待ちください。`);
     return;
   }
@@ -1394,6 +1553,11 @@ async function runBatch(){
     await saveListings();
     renderListings();
     renderHistory();
+    buyers.forEach(buyer=>{
+      const list = byBuyer[buyer];
+      const names = list.map(x=>`「${x.name}${spOf(x)}」`).join("、");
+      pushNotify(buyer, `【不動在庫マーケット】\n${buyer} 様\n${list.length}件の譲受が承認されました。\n${names}\n現品と譲渡書が ${list[0].seller} から届きます。`);
+    });
     if(buyers.length===1){
       showDocGroup(firstKey);
     }else{
@@ -1416,6 +1580,7 @@ async function requestItem(id){
   item.status = "requested";
   await saveListings();
   renderListings();
+  notifyBid(item, currentUser.pharmacy);
   toast("申し込みました。出品薬局の承認をお待ちください。");
 }
 // 譲受者が申込を取り消す
@@ -1464,6 +1629,7 @@ async function decideTransfer(id){
   await saveListings();
   renderListings();
   renderHistory();
+  notifyApproved(item, item.buyer);
   showDocGroup(groupKey(item));
 }
 async function cancelListing(id){
@@ -1523,6 +1689,37 @@ function renderHistory(){
 /* ================= 譲渡書(紅白会様式・2枚綴り) ================= */
 function ph(name){ return config.pharmacies.find(x=>x.name===name) || {}; }
 function phName(name){ const p = ph(name); return p.no ? `${p.no} ${name}` : name; }
+/* ===== LINE WORKS通知 ===== */
+function phLwid(name){ const p = ph(name); return (p && p.lwid) ? p.lwid : ""; }
+function spOf(x){ return x.spec ? " "+x.spec : ""; }
+function sendNotifyRaw(uid, text){
+  if(!config.notifyUrl || !uid) return false;
+  try{
+    fetch(config.notifyUrl, {method:"POST", mode:"no-cors",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body: JSON.stringify({token: config.notifyToken||"", userId: uid, text})}).catch(()=>{});
+    return true;
+  }catch(e){ console.error("通知送信失敗", e); return false; }
+}
+function pushNotify(toPharmacyName, text){
+  if(!config.notifyOn) return;
+  const uid = phLwid(toPharmacyName);
+  if(!uid) return;
+  sendNotifyRaw(uid, text);
+}
+function notifyBid(item, buyerName){
+  pushNotify(item.seller, `【不動在庫マーケット】\n${item.seller} 様\n「${item.name}${spOf(item)}」に ${buyerName} から譲受の申込が入りました。\nアプリで内容を確認し、承認(譲渡決定)してください。`);
+}
+function notifyApproved(item, buyerName){
+  pushNotify(buyerName, `【不動在庫マーケット】\n${buyerName} 様\n「${item.name}${spOf(item)}」の譲受が承認されました。\n現品と譲渡書・支払集金代行依頼書が ${item.seller} から届きます。`);
+}
+function testNotify(){
+  if(!config.notifyUrl){ toast("先にGAS中継URLを入力してください。","error"); return; }
+  const target = config.pharmacies.find(p=>p.lwid);
+  if(!target){ toast("LINE WORKS IDが登録された薬局がありません。先にマスタに入力してください。","error"); return; }
+  sendNotifyRaw(target.lwid, `【不動在庫マーケット】テスト送信です。\nこの通知が ${target.name} のLINE WORKSに届けば設定は正常です。`);
+  toast(`${target.name} にテスト送信しました。LINE WORKSをご確認ください。`);
+}
 function phLabel(p){ return (p.no ? p.no+" " : "") + p.name + (p.abbr ? `(${p.abbr})` : ""); }
 function groupKey(x){ return `${x.seller}__${x.buyer}__${x.decidedAt}`; }
 function warekiDate(s){
@@ -1631,8 +1828,9 @@ function renderSettings(){
     <td><input type="text" value="${esc(p.license||"")}" onchange="config.pharmacies[${i}].license=this.value.trim()"></td>
     <td><input type="text" value="${esc(p.addr||"")}" onchange="config.pharmacies[${i}].addr=this.value.trim()"></td>
     <td><input type="text" value="${esc(p.pin||"")}" placeholder="なし" onchange="config.pharmacies[${i}].pin=this.value.trim()"></td>
+    <td><input type="text" value="${esc(p.lwid||"")}" placeholder="未登録" onchange="config.pharmacies[${i}].lwid=this.value.trim()"></td>
     <td><button class="ghost small" onclick="removePharmacy(${i})">削除</button></td>
-  </tr>`).join("") || `<tr><td colspan="8" style="color:var(--ink-soft)">薬局が未登録です。</td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="9" style="color:var(--ink-soft)">薬局が未登録です。</td></tr>`;
 
   const rtb = document.querySelector("#ruleTable tbody");
   const sorted = [...config.rules].sort((a,b)=>b.minMonths-a.minMonths);
@@ -1645,6 +1843,9 @@ function renderSettings(){
 
   const ap = document.getElementById("adminPinInput");
   if(ap) ap.value = config.adminPin || "";
+  const non = document.getElementById("notifyOn"); if(non) non.checked = !!config.notifyOn;
+  const nurl = document.getElementById("notifyUrl"); if(nurl) nurl.value = config.notifyUrl || "";
+  const ntok = document.getElementById("notifyToken"); if(ntok) ntok.value = config.notifyToken || "";
 }
 async function addPharmacy(){
   const no = document.getElementById("newPhNo").value.trim();
@@ -1654,11 +1855,12 @@ async function addPharmacy(){
   const addr = document.getElementById("newPhAddr").value.trim();
   const license = document.getElementById("newPhLicense").value.trim();
   const pin = document.getElementById("newPhPin").value.trim();
+  const lwid = document.getElementById("newPhLwid").value.trim();
   if(!name){ toast("薬局名を入力してください。","error"); return; }
   if(config.pharmacies.some(p=>p.name===name)){ toast("同名の薬局が既に登録されています。","error"); return; }
   if(no && config.pharmacies.some(p=>p.no===no)){ toast("同じ略番が既に登録されています。","error"); return; }
-  config.pharmacies.push({no, abbr, name, owner, license, addr, pin});
-  ["newPhNo","newPhAbbr","newPhName","newPhOwner","newPhLicense","newPhAddr","newPhPin"].forEach(id=>document.getElementById(id).value="");
+  config.pharmacies.push({no, abbr, name, owner, license, addr, pin, lwid});
+  ["newPhNo","newPhAbbr","newPhName","newPhOwner","newPhLicense","newPhAddr","newPhPin","newPhLwid"].forEach(id=>document.getElementById(id).value="");
   await saveConfig();
   renderSettings(); renderSellerSelect();
 }
