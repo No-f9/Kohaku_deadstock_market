@@ -168,6 +168,11 @@
   .listing .top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;}
   .listing .name{font-size:15.5px;font-weight:700;}
   .listing .meta{font-size:13px;color:var(--ink-soft);margin-top:2px;}
+  .listing .memo-note{display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 10px;
+    background:#FFF6E9;border:1px solid #F0D9AE;border-left:4px solid #E0A33B;border-radius:6px;}
+  .listing .memo-note .memo-label{flex:0 0 auto;font-size:11px;font-weight:700;color:#9A6B16;
+    background:#F3DFB8;padding:1px 8px;border-radius:10px;}
+  .listing .memo-note .memo-text{font-size:13.5px;color:#5a4a2a;font-weight:600;line-height:1.4;}
   .listing .grid{
     display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
     gap:6px 14px;margin:10px 0;font-size:13.5px;
@@ -264,6 +269,8 @@
   #docArea table.goods th{background:#F4F1EC;font-weight:600;font-size:11px;}
   #docArea table.goods td.l{text-align:left;}
   #docArea table.goods td.r{text-align:right;}
+  #docArea table.goods tr.namerow td{text-align:left;font-weight:700;background:#F6F2EB;font-size:12.5px;}
+  #docArea table.goods tr.datarow td{font-size:11.5px;}
   #docArea .total-label{font-weight:600;}
   #docArea .parties{display:flex;gap:24px;flex-wrap:wrap;margin-top:6px;}
   #docArea .party-col{flex:1;min-width:230px;}
@@ -473,11 +480,11 @@
   <div class="sortbar">
     <label for="sortKey">並べ替え</label>
     <select id="sortKey" onchange="renderListings()">
-      <option value="created">出品日(新しい順)</option>
+      <option value="created">出品日</option>
       <option value="name">品名</option>
       <option value="yakka">薬価</option>
       <option value="discount">割引率</option>
-      <option value="expiry">使用期限(近い順)</option>
+      <option value="expiry">使用期限</option>
       <option value="price">譲渡価格</option>
     </select>
     <button class="ghost small" id="sortDirBtn" onclick="toggleSortDir()">昇順 ↑</button>
@@ -502,10 +509,10 @@
 <section id="tab-settings" class="tab">
   <div class="card">
     <h2>組合員薬局マスタ</h2>
-    <div class="hint" style="margin-bottom:8px;">略番・略称は支払集金代行依頼書に、薬局名・所在地・開設者は譲渡書・譲り受け書に自動記載されます。セルは直接編集できます(編集後は下の「設定を保存」)。<br>暗証番号は組合員ログイン時の本人確認用です(空欄なら暗証なしでログイン可)。</div>
+    <div class="hint" style="margin-bottom:8px;">略番・略称は支払集金代行依頼書に、薬局名・所在地・開設者・許可番号は譲渡書・譲り受け書に自動記載されます。セルは直接編集できます(編集後は下の「設定を保存」)。<br>暗証番号は組合員ログイン時の本人確認用です(空欄なら暗証なしでログイン可)。</div>
     <div style="overflow-x:auto;">
     <table class="settings" id="pharmacyTable">
-      <thead><tr><th style="width:60px">略番</th><th style="width:90px">略称</th><th>薬局名</th><th>開設者</th><th>所在地</th><th style="width:84px">暗証番号</th><th style="width:56px"></th></tr></thead>
+      <thead><tr><th style="width:60px">略番</th><th style="width:90px">略称</th><th>薬局名</th><th>開設者</th><th>許可番号</th><th>所在地</th><th style="width:84px">暗証番号</th><th style="width:56px"></th></tr></thead>
       <tbody></tbody>
     </table>
     </div>
@@ -514,6 +521,7 @@
       <div class="w-narrow"><input type="text" id="newPhAbbr" placeholder="略称"></div>
       <div><input type="text" id="newPhName" placeholder="薬局名"></div>
       <div><input type="text" id="newPhOwner" placeholder="開設者"></div>
+      <div><input type="text" id="newPhLicense" placeholder="許可番号"></div>
       <div><input type="text" id="newPhAddr" placeholder="所在地"></div>
       <div class="w-narrow"><input type="text" id="newPhPin" placeholder="暗証(任意)"></div>
       <div class="w-narrow"><button class="ghost" style="width:100%;" onclick="addPharmacy()">追加</button></div>
@@ -957,7 +965,7 @@ async function saveListings(){ scheduleSave(); }
 function init(){
   // 旧形式データの移行(略番・略称・開設者の欄を補完)
   config.pharmacies = (config.pharmacies||[]).map(p=>({
-    no:p.no||"", abbr:p.abbr||"", name:p.name||"", owner:p.owner||"", addr:p.addr||"", pin:p.pin||""
+    no:p.no||"", abbr:p.abbr||"", name:p.name||"", owner:p.owner||"", license:p.license||"", addr:p.addr||"", pin:p.pin||""
   }));
   if(config.adminPin===undefined) config.adminPin = "0000";
   renderSellerSelect();
@@ -1299,10 +1307,11 @@ function renderListings(){
         <div class="top">
           <div>
             <div class="name">${esc(x.name)} <span style="font-weight:400;font-size:13px;color:var(--ink-soft)">${esc(x.spec)}</span></div>
-            <div class="meta">出品: ${esc(phName(x.seller))}(${fmtDate(x.createdAt)})${x.memo?` / ${esc(x.memo)}`:""}</div>
+            <div class="meta">出品: ${esc(phName(x.seller))}(${fmtDate(x.createdAt)})</div>
           </div>
           <div>${statusChip}${urgencyChip(m)}</div>
         </div>
+        ${x.memo?`<div class="memo-note"><span class="memo-label">備考</span><span class="memo-text">${esc(x.memo)}</span></div>`:""}
         <div class="grid">
           <div><b>使用期限</b>${fmtDate(x.expiry)}</div>
           <div><b>ロット</b>${esc(x.lot)||"−"}</div>
@@ -1528,15 +1537,15 @@ function showDocGroup(key){
   const seller = ph(x0.seller), buyer = ph(x0.buyer);
   const total = items.reduce((sum,x)=>sum+x.price,0);
   const fee = Math.round(total*0.05);
-  const ROWS = Math.max(6, items.length);
+  const ROWS = Math.max(4, items.length);
   let rows = "";
   for(let i=0;i<ROWS;i++){
     const x = items[i];
     if(x){
       const unitPrice = x.qty>0 ? Math.round((x.price/x.qty)*100)/100 : "";
       const discount = (x.rate!=null && x.rate!=="") ? (100-x.rate)+"%" : "";
-      rows += `<tr>
-        <td class="l">${esc(x.name)}${x.spec?` ${esc(x.spec)}`:""}</td>
+      rows += `<tr class="namerow"><td colspan="7" class="l">${esc(x.name)}${x.spec?`　${esc(x.spec)}`:""}</td></tr>
+      <tr class="datarow">
         <td class="r">${unitPrice!==""?unitPrice.toLocaleString():""}</td>
         <td>${x.qty}${esc(x.unit)}</td>
         <td class="r">${x.price.toLocaleString()}</td>
@@ -1546,7 +1555,8 @@ function showDocGroup(key){
         <td class="r">${x.yakka?x.yakka.toLocaleString():""}</td>
       </tr>`;
     }else{
-      rows += `<tr><td class="l">&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
+      rows += `<tr class="namerow"><td colspan="7" class="l">&nbsp;</td></tr>
+      <tr class="datarow"><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
     }
   }
   const doc = document.getElementById("docArea");
@@ -1556,9 +1566,9 @@ function showDocGroup(key){
     <div class="doc-title">医療用医薬品　譲渡書・譲り受け書</div>
     <div class="doc-meta"><span>【注意】税金は入れないでください。</span><span>${warekiDate(x0.decidedAt)}　No. ${esc(x0.no)}</span></div>
     <table class="goods">
-      <tr><th style="width:26%">医薬品名・規格</th><th>譲渡価</th><th>数量</th><th>金額</th><th>使用期限</th><th>製造番号</th><th>値引率</th><th>備考<br>(薬価)</th></tr>
+      <tr><th>譲渡価</th><th>数量</th><th>金額</th><th>使用期限</th><th>製造番号</th><th>値引率</th><th>備考(薬価)</th></tr>
       ${rows}
-      <tr><td colspan="3" class="total-label">合計金額</td><td class="r" style="font-weight:700;">${total.toLocaleString()}円</td><td colspan="4"></td></tr>
+      <tr><td colspan="2" class="total-label">合計金額</td><td class="r" style="font-weight:700;">${total.toLocaleString()}円</td><td colspan="4"></td></tr>
     </table>
     <div class="parties">
       <div class="party-col">
@@ -1566,12 +1576,14 @@ function showDocGroup(key){
         <div><b>薬局名</b><span>${esc(buyer.name||x0.buyer)}</span></div>
         <div><b>所在地</b><span>${esc(buyer.addr||"")}</span></div>
         <div><b>開設者</b><span>${esc(buyer.owner||"")}</span></div>
+        <div><b>許可番号</b><span>${esc(buyer.license||"")}</span></div>
       </div>
       <div class="party-col">
         <h3>譲り渡し薬局</h3>
         <div><b>薬局名</b><span>${esc(seller.name||x0.seller)}</span></div>
         <div><b>所在地</b><span>${esc(seller.addr||"")}</span></div>
         <div><b>開設者</b><span>${esc(seller.owner||"")}</span></div>
+        <div><b>許可番号</b><span>${esc(seller.license||"")}</span></div>
       </div>
     </div>
     <div class="stamps">
@@ -1616,10 +1628,11 @@ function renderSettings(){
     <td><input type="text" value="${esc(p.abbr||"")}" onchange="config.pharmacies[${i}].abbr=this.value.trim()"></td>
     <td><input type="text" value="${esc(p.name)}" onchange="config.pharmacies[${i}].name=this.value.trim()"></td>
     <td><input type="text" value="${esc(p.owner||"")}" onchange="config.pharmacies[${i}].owner=this.value.trim()"></td>
+    <td><input type="text" value="${esc(p.license||"")}" onchange="config.pharmacies[${i}].license=this.value.trim()"></td>
     <td><input type="text" value="${esc(p.addr||"")}" onchange="config.pharmacies[${i}].addr=this.value.trim()"></td>
     <td><input type="text" value="${esc(p.pin||"")}" placeholder="なし" onchange="config.pharmacies[${i}].pin=this.value.trim()"></td>
     <td><button class="ghost small" onclick="removePharmacy(${i})">削除</button></td>
-  </tr>`).join("") || `<tr><td colspan="7" style="color:var(--ink-soft)">薬局が未登録です。</td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="8" style="color:var(--ink-soft)">薬局が未登録です。</td></tr>`;
 
   const rtb = document.querySelector("#ruleTable tbody");
   const sorted = [...config.rules].sort((a,b)=>b.minMonths-a.minMonths);
@@ -1639,12 +1652,13 @@ async function addPharmacy(){
   const name = document.getElementById("newPhName").value.trim();
   const owner = document.getElementById("newPhOwner").value.trim();
   const addr = document.getElementById("newPhAddr").value.trim();
+  const license = document.getElementById("newPhLicense").value.trim();
   const pin = document.getElementById("newPhPin").value.trim();
   if(!name){ toast("薬局名を入力してください。","error"); return; }
   if(config.pharmacies.some(p=>p.name===name)){ toast("同名の薬局が既に登録されています。","error"); return; }
   if(no && config.pharmacies.some(p=>p.no===no)){ toast("同じ略番が既に登録されています。","error"); return; }
-  config.pharmacies.push({no, abbr, name, owner, addr, pin});
-  ["newPhNo","newPhAbbr","newPhName","newPhOwner","newPhAddr","newPhPin"].forEach(id=>document.getElementById(id).value="");
+  config.pharmacies.push({no, abbr, name, owner, license, addr, pin});
+  ["newPhNo","newPhAbbr","newPhName","newPhOwner","newPhLicense","newPhAddr","newPhPin"].forEach(id=>document.getElementById(id).value="");
   await saveConfig();
   renderSettings(); renderSellerSelect();
 }
