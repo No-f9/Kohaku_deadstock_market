@@ -692,7 +692,7 @@ async function startVideoStream(video, constraints){
 /* ===== ZXing-C++(WASM):iOS Safari等でもDataMatrixを高精度に読む ===== */
 const ZXWASM_JS   = "https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.0/dist/iife/reader/index.js";
 const ZXWASM_WASM = "https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.0/dist/reader/zxing_reader.wasm";
-const READ_FORMATS = ["DataMatrix","QRCode","Code128","Code39","ITF","EAN13","EAN8","UPCA","UPCE","Codabar"];
+const READ_FORMATS = ["DataBarLtd","DataBar","DataBarExp","DataMatrix","QRCode","Code128","ITF","EAN13","EAN8","UPCA","Codabar"];
 const READ_OPTS = { formats: READ_FORMATS, tryHarder:true, tryInvert:true, tryDownscale:true, textMode:"Plain", maxNumberOfSymbols:1 };
 let zxwasmLoading = null;
 function loadZXingWasm(){
@@ -724,12 +724,13 @@ function startWasmLoop(video){
       busy = true;
       try{
         const vw = video.videoWidth, vh = video.videoHeight;
-        const side = Math.floor(Math.min(vw, vh) * 0.7);   // 中央70%の正方形ROI(小さいコード対策)
-        const sx = Math.floor((vw - side)/2), sy = Math.floor((vh - side)/2);
-        const out = Math.min(side, 800);
-        canvas.width = out; canvas.height = out;
-        ctx.drawImage(video, sx, sy, side, side, 0, 0, out, out);
-        const img = ctx.getImageData(0, 0, out, out);
+        const cw = Math.floor(vw * 0.9), ch = Math.floor(vh * 0.6);   // 中央の横長ROI(線形DataBar/合成シンボルも収まる)
+        const sx = Math.floor((vw - cw)/2), sy = Math.floor((vh - ch)/2);
+        const scale = Math.min(1, 1100 / Math.max(cw, ch));           // 解像度はできるだけ維持
+        const ow = Math.max(1, Math.round(cw*scale)), oh = Math.max(1, Math.round(ch*scale));
+        canvas.width = ow; canvas.height = oh;
+        ctx.drawImage(video, sx, sy, cw, ch, 0, 0, ow, oh);
+        const img = ctx.getImageData(0, 0, ow, oh);
         const text = await wasmDecode(img);
         if(text){ onScanned(text); return; }
       }catch(e){}
@@ -806,31 +807,32 @@ async function openScanner(){
     height: { ideal: 1080 }
   }, audio:false };
   try{
-    nativeDetector = await getNativeDetector();
-    let wasmOk = false;
-    if(!nativeDetector){ wasmOk = await loadZXingWasm().then(()=>true).catch(()=>false); }
-    if(nativeDetector){
-      // --- ① 端末標準デコーダ(Android系・DataMatrix高精度) ---
-      scanMode = "native";
-      await startVideoStream(video, constraints);
-      top.textContent = "コードを枠内に大きく映してください(データマトリックス対応)";
-      startNativeLoop(video);
-    }else if(wasmOk){
-      // --- ② ZXing-C++(WASM):iPhone/Safari等でもDataMatrix対応 ---
+    let wasmOk = await loadZXingWasm().then(()=>true).catch(()=>false);
+    if(wasmOk){
+      // --- ① ZXing-C++(WASM):DataBar(合成シンボルの線形部)/DataMatrix/1次元に幅広く対応。iPhone可 ---
       scanMode = "wasm";
       await startVideoStream(video, constraints);
-      top.textContent = "コードを枠内に大きく映してください(データマトリックス対応)";
+      top.textContent = "コードを枠内に大きく映してください";
       startWasmLoop(video);
     }else{
-      // --- ③ 最終フォールバック: ZXing(JS) ---
-      scanMode = "zxing";
-      await loadZXing();
-      top.textContent = "二次元コードを枠内に大きく映してください";
-      zxingReader = newReader();
-      zxingControls = await zxingReader.decodeFromConstraints(constraints, video, (result, err)=>{
-        if(result) onScanned(result.getText());
-      });
-      try{ setupScanTrack(video.srcObject); }catch(e){}
+      nativeDetector = await getNativeDetector();
+      if(nativeDetector){
+        // --- ② 端末標準デコーダ(Android系。※DataBarは非対応) ---
+        scanMode = "native";
+        await startVideoStream(video, constraints);
+        top.textContent = "コードを枠内に大きく映してください";
+        startNativeLoop(video);
+      }else{
+        // --- ③ 最終フォールバック: ZXing(JS) ---
+        scanMode = "zxing";
+        await loadZXing();
+        top.textContent = "二次元コードを枠内に大きく映してください";
+        zxingReader = newReader();
+        zxingControls = await zxingReader.decodeFromConstraints(constraints, video, (result, err)=>{
+          if(result) onScanned(result.getText());
+        });
+        try{ setupScanTrack(video.srcObject); }catch(e){}
+      }
     }
     // 数秒読めなければヒントを表示
     clearTimeout(scanTipTimer);
@@ -855,7 +857,13 @@ async function handlePhoto(input){
   const file = input.files && input.files[0];
   input.value = ""; // 同じ写真を選び直せるように
   if(!file) return;
-  // 1) 端末標準デコーダ優先(DataMatrixに強い)
+  // 1) ZXing-C++(WASM):DataBar(合成シンボルの線形部)/DataMatrix等に幅広く対応
+  try{
+    await loadZXingWasm();
+    const t = await wasmDecodeBlob(file);
+    if(t){ onScanned(t); return; }
+  }catch(e){ /* 次のエンジンへ */ }
+  // 2) 端末標準デコーダ(DataMatrix/QR/1次元。※DataBarは非対応)
   try{
     const det = await getNativeDetector();
     if(det){
@@ -864,12 +872,6 @@ async function handlePhoto(input){
       try{ bmp.close && bmp.close(); }catch(e){}
       if(codes && codes.length && codes[0].rawValue){ onScanned(codes[0].rawValue); return; }
     }
-  }catch(e){ /* 次のエンジンへ */ }
-  // 2) ZXing-C++(WASM):iPhone等でもDataMatrixに強い
-  try{
-    await loadZXingWasm();
-    const t = await wasmDecodeBlob(file);
-    if(t){ onScanned(t); return; }
   }catch(e){ /* 次のエンジンへ */ }
   // 3) 最終フォールバック: ZXing(JS)
   try{
