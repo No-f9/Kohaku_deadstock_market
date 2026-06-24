@@ -243,6 +243,15 @@
     overflow:auto;padding:20px 10px;
   }
   .modal-bg.show{display:block;}
+  .member-menu h3{font-size:14px;margin:0 0 6px;color:var(--beni);}
+  .mm-sec{padding:14px 0;border-top:1px solid var(--line);}
+  .mm-sec:first-of-type{border-top:none;padding-top:4px;}
+  .favlist{display:flex;flex-wrap:wrap;gap:6px;}
+  .favchip{display:inline-flex;align-items:center;gap:6px;background:#FFF1F3;border:1px solid #F2C9D1;color:#8A1F33;border-radius:14px;padding:3px 7px 3px 11px;font-size:13px;}
+  .favchip button{border:none;background:#D98AA0;color:#fff;border-radius:50%;width:17px;height:17px;line-height:17px;font-size:11px;cursor:pointer;padding:0;}
+  .filterbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;}
+  .filterbar input{flex:1;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .import-box{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);}
   .modal{
     max-width:760px;margin:0 auto;background:#fff;border-radius:6px;
     padding:14px;
@@ -361,6 +370,7 @@
     <small>組合員間 デッドストック譲渡 — 試作版</small>
     <div class="userbox" id="userbox" style="display:none;">
       <span class="who" id="whoami"></span>
+      <button class="ghost small" id="myMenuBtn" onclick="openMyMenu()" style="display:none;">マイメニュー</button>
       <button class="ghost small" onclick="logout()">ログアウト</button>
     </div>
   </div>
@@ -477,6 +487,10 @@
   <div class="notice">
     譲受したい薬局は品目の<b>「譲り受けを申し込む」</b>(チェックで複数選択も可)を押します。出品薬局側に「承認待ち」として表示され、出品薬局が<b>「譲渡決定」</b>を押すと譲渡書・支払集金代行依頼書が作成されます。
   </div>
+  <div class="filterbar">
+    <input type="text" id="listFilter" placeholder="🔍 品名・略称で絞り込み(部分一致)" oninput="onFilterInput()" autocomplete="off">
+    <button class="ghost small" id="filterClearBtn" onclick="clearFilter()" style="display:none;">クリア ✕</button>
+  </div>
   <div class="sortbar">
     <label for="sortKey">並べ替え</label>
     <select id="sortKey" onchange="renderListings()">
@@ -526,6 +540,13 @@
       <div class="w-narrow"><input type="text" id="newPhPin" placeholder="暗証(任意)"></div>
       <div><input type="text" id="newPhLwid" placeholder="LINE WORKS ID"></div>
       <div class="w-narrow"><button class="ghost" style="width:100%;" onclick="addPharmacy()">追加</button></div>
+    </div>
+    <div class="import-box">
+      <div class="hint" style="margin-bottom:6px;">Excel / CSV から一括取込: 1行目に見出し(<b>略番 / 略称 / 薬局名 / 開設者 / 許可番号 / 所在地 / 暗証番号 / LINE WORKS ID</b>)を置いてください。「薬局名」列は必須です。</div>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;font-size:13px;"><input type="checkbox" id="importReplace" style="width:auto;"> 既存を全置換(チェックなし=追加・更新)</label>
+      <input type="file" id="phImportFile" accept=".xlsx,.xls,.csv" style="display:none;" onchange="importPharmacies(event)">
+      <button class="ghost small" onclick="document.getElementById('phImportFile').click()">📥 ファイルから取込</button>
+      <button class="ghost small" onclick="downloadPhTemplate()">様式をダウンロード</button>
     </div>
   </div>
 
@@ -587,6 +608,34 @@
       <button class="ghost" onclick="closeDoc()">閉じる</button>
     </div>
     <div id="docArea"></div>
+  </div>
+</div>
+
+<!-- ============ マイメニュー(組合員) ============ -->
+<div class="modal-bg" id="memberBg" onclick="if(event.target===this)closeMyMenu()">
+  <div class="modal member-menu">
+    <div class="modal-actions"><button class="ghost" onclick="closeMyMenu()">閉じる</button></div>
+    <h2 style="margin:0 0 2px;">マイメニュー</h2>
+    <div class="hint" id="myMenuTitle" style="margin-bottom:14px;"></div>
+
+    <div class="mm-sec">
+      <h3>暗証番号の変更</h3>
+      <div class="hint" style="margin-bottom:6px;">ログイン時の本人確認に使います(空欄なら暗証なし)。</div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="text" id="myPinInput" placeholder="新しい暗証番号" style="max-width:200px;">
+        <button class="primary small" onclick="saveMyPin()">変更を保存</button>
+      </div>
+    </div>
+
+    <div class="mm-sec">
+      <h3>お気に入り薬(出品通知)</h3>
+      <div class="hint" style="margin-bottom:6px;">登録した語を含む薬が新たに出品されると、LINE WORKSに通知が届きます(品名の部分一致)。通知には自局のLINE WORKS IDの登録が必要です。</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <input type="text" id="favInput" placeholder="例: ロキソプロフェン" style="max-width:260px;" onkeydown="if(event.key==='Enter'){event.preventDefault();addFavorite();}">
+        <button class="primary small" onclick="addFavorite()">追加</button>
+      </div>
+      <div id="favList" class="favlist"></div>
+    </div>
   </div>
 </div>
 
@@ -1072,7 +1121,7 @@ async function saveListings(){ scheduleSave(); }
 function init(){
   // 旧形式データの移行(略番・略称・開設者の欄を補完)
   config.pharmacies = (config.pharmacies||[]).map(p=>({
-    no:p.no||"", abbr:p.abbr||"", name:p.name||"", owner:p.owner||"", license:p.license||"", addr:p.addr||"", pin:p.pin||"", lwid:p.lwid||""
+    no:p.no||"", abbr:p.abbr||"", name:p.name||"", owner:p.owner||"", license:p.license||"", addr:p.addr||"", pin:p.pin||"", lwid:p.lwid||"", favorites:Array.isArray(p.favorites)?p.favorites:[]
   }));
   if(config.adminPin===undefined) config.adminPin = "0000";
   if(config.notifyOn===undefined) config.notifyOn = false;
@@ -1285,6 +1334,7 @@ async function registerListing(continuous){
     saveConfig();
   }
   await saveListings();
+  notifyNewListing(item);
   // フォームクリア
   ["gs1input","f-name","f-spec","f-gtin","f-lot","f-expiry","f-yakka","f-price","f-memo"]
     .forEach(id=>document.getElementById(id).value="");
@@ -1362,8 +1412,12 @@ function actionType(x){
 function renderListings(){
   const area = document.getElementById("listingArea");
   let items = listings.filter(x=>x.status==="listed" || x.status==="requested");
+  const hasAny = items.length>0;
+  items = items.filter(matchFilter);
   if(items.length===0){
-    area.innerHTML = `<div class="empty">現在、出品中の在庫はありません。<br>「出品登録」タブから登録できます。</div>`;
+    area.innerHTML = hasAny
+      ? `<div class="empty">条件に一致する出品はありません。<br>検索語を変えるか、絞り込みを解除してください。</div>`
+      : `<div class="empty">現在、出品中の在庫はありません。<br>「出品登録」タブから登録できます。</div>`;
     updateBatchBar();
     return;
   }
@@ -1500,7 +1554,7 @@ async function runBatch(){
     Object.keys(bySeller2).forEach(seller=>{
       const list = bySeller2[seller];
       const names = list.map(x=>`「${x.name}${spOf(x)}」`).join("、");
-      pushNotify(seller, `【不動在庫マーケット】\n${seller} 様\n${currentUser.pharmacy} から ${list.length}件の譲受申込が入りました。\n${names}\nアプリで承認してください。`);
+      pushNotify(seller, `【不動在庫マーケット】\n${phFull(seller)} 様\n${phFull(currentUser.pharmacy)} 様 から ${list.length}件の譲受申込が入りました。\n${names}\nアプリで承認してください。`);
     });
     toast(`${items.length}件を申し込みました。出品薬局の承認をお待ちください。`);
     return;
@@ -1531,7 +1585,7 @@ async function runBatch(){
     buyers.forEach(buyer=>{
       const list = byBuyer[buyer];
       const names = list.map(x=>`「${x.name}${spOf(x)}」`).join("、");
-      pushNotify(buyer, `【不動在庫マーケット】\n${buyer} 様\n${list.length}件の譲受が承認されました。\n${names}\n現品と譲渡書が ${list[0].seller} から届きます。`);
+      pushNotify(buyer, `【不動在庫マーケット】\n${phFull(buyer)} 様\n${list.length}件の譲受が承認されました。\n${names}\n現品と譲渡書が ${phFull(list[0].seller)} 様 から届きます。`);
     });
     if(buyers.length===1){
       showDocGroup(firstKey);
@@ -1666,6 +1720,178 @@ function ph(name){ return config.pharmacies.find(x=>x.name===name) || {}; }
 function phName(name){ const p = ph(name); return p.no ? `${p.no} ${name}` : name; }
 /* ===== LINE WORKS通知 ===== */
 function phLwid(name){ const p = ph(name); return (p && p.lwid) ? p.lwid : ""; }
+/* ===== 表示用フル薬局名(略番略称_薬局名) ===== */
+function phFull(name){ const p = ph(name); const head = `${p.no||""}${p.abbr||""}`; return head ? `${head}_${name}` : (name||""); }
+
+/* ===== 出品リスト 絞り込み(品名・略称の部分一致) ===== */
+let listFilter = "";
+function matchFilter(x){
+  if(!listFilter) return true;
+  const abbr = (ph(x.seller).abbr||"").toLowerCase();
+  const name = (x.name||"").toLowerCase();
+  return name.includes(listFilter) || abbr.includes(listFilter);
+}
+function onFilterInput(){
+  const el = document.getElementById("listFilter");
+  listFilter = (el ? el.value : "").trim().toLowerCase();
+  const cb = document.getElementById("filterClearBtn");
+  if(cb) cb.style.display = listFilter ? "" : "none";
+  renderListings();
+}
+function clearFilter(){
+  listFilter = "";
+  const el = document.getElementById("listFilter"); if(el) el.value = "";
+  const cb = document.getElementById("filterClearBtn"); if(cb) cb.style.display = "none";
+  renderListings();
+}
+
+/* ===== お気に入り薬(新規出品の通知) ===== */
+function myPharmacy(){ return config.pharmacies.find(x=>x.name===(currentUser&&currentUser.pharmacy)) || null; }
+function myFavorites(){ const p=myPharmacy(); return (p && Array.isArray(p.favorites)) ? p.favorites : []; }
+function notifyNewListing(item){
+  if(!config.notifyOn || !config.notifyUrl) return;
+  const sp = ph(item.seller);
+  try{
+    fetch(config.notifyUrl, {method:"POST", mode:"no-cors",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body: JSON.stringify({ token: config.notifyToken||"", action:"newListing",
+        item:{ name:item.name, spec:item.spec||"", seller:phFull(item.seller) },
+        sellerLwid: sp.lwid||"" })}).catch(()=>{});
+  }catch(e){}
+}
+function syncFavorites(){
+  const p = myPharmacy();
+  if(!config.notifyOn || !config.notifyUrl || !p || !p.lwid) return;
+  try{
+    fetch(config.notifyUrl, {method:"POST", mode:"no-cors",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body: JSON.stringify({ token: config.notifyToken||"", action:"saveFavorites",
+        userId: p.lwid, keywords: (p.favorites||[]) })}).catch(()=>{});
+  }catch(e){}
+}
+function renderFavorites(){
+  const wrap = document.getElementById("favList"); if(!wrap) return;
+  const favs = myFavorites();
+  wrap.innerHTML = favs.length
+    ? favs.map((k,i)=>`<span class="favchip">${esc(k)}<button onclick="removeFavorite(${i})" title="削除">✕</button></span>`).join("")
+    : `<span class="hint">登録なし</span>`;
+}
+function addFavorite(){
+  const el = document.getElementById("favInput"); const v = (el ? el.value : "").trim();
+  if(!v) return;
+  const p = myPharmacy();
+  if(!p){ toast("薬局情報が見つかりません。","error"); return; }
+  if(!Array.isArray(p.favorites)) p.favorites = [];
+  if(p.favorites.some(k=>k.toLowerCase()===v.toLowerCase())){ toast("すでに登録済みです。"); el.value=""; return; }
+  p.favorites.push(v); saveConfig(); el.value="";
+  renderFavorites(); syncFavorites();
+  toast("お気に入りに追加しました。");
+}
+function removeFavorite(i){
+  const p = myPharmacy();
+  if(!p || !Array.isArray(p.favorites)) return;
+  p.favorites.splice(i,1); saveConfig(); renderFavorites(); syncFavorites();
+}
+
+/* ===== マイメニュー(暗証番号変更・お気に入り) ===== */
+function openMyMenu(){
+  const p = myPharmacy();
+  if(!p){ toast("組合員としてログインしてください。","error"); return; }
+  const t = document.getElementById("myMenuTitle"); if(t) t.textContent = phLabel(p);
+  const pin = document.getElementById("myPinInput"); if(pin) pin.value = p.pin||"";
+  const fi = document.getElementById("favInput"); if(fi) fi.value = "";
+  renderFavorites();
+  document.getElementById("memberBg").classList.add("show");
+}
+function closeMyMenu(){ document.getElementById("memberBg").classList.remove("show"); }
+function saveMyPin(){
+  const p = myPharmacy(); if(!p){ toast("薬局情報が見つかりません。","error"); return; }
+  p.pin = (document.getElementById("myPinInput").value||"").trim();
+  saveConfig();
+  toast("暗証番号を変更しました。");
+}
+
+/* ===== 薬局マスタ Excel/CSV 一括取込 ===== */
+function loadSheetJS(){
+  return new Promise((resolve,reject)=>{
+    if(window.XLSX) return resolve(window.XLSX);
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = ()=> window.XLSX ? resolve(window.XLSX) : reject(new Error("XLSX未定義"));
+    s.onerror = ()=> reject(new Error("XLSX読込失敗"));
+    document.head.appendChild(s);
+  });
+}
+const PH_HEADER_MAP = {
+  "略番":"no","no":"no",
+  "略称":"abbr","abbr":"abbr",
+  "薬局名":"name","名称":"name","name":"name",
+  "開設者":"owner","owner":"owner",
+  "許可番号":"license","許可":"license","license":"license",
+  "所在地":"addr","住所":"addr","addr":"addr",
+  "暗証番号":"pin","暗証":"pin","pin":"pin",
+  "lineworksid":"lwid","lineworks":"lwid","lwid":"lwid","id":"lwid"
+};
+function normHeader(h){ return String(h==null?"":h).trim().toLowerCase().replace(/\s+/g,""); }
+async function importPharmacies(ev){
+  const file = ev.target.files && ev.target.files[0];
+  ev.target.value = "";
+  if(!file) return;
+  let XLSX;
+  try{ XLSX = await loadSheetJS(); }
+  catch(e){ toast("取込ライブラリを読み込めませんでした。ネット接続をご確認ください。","error"); return; }
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:"array"});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, blankrows:false, defval:""});
+    if(rows.length < 2){ toast("データ行が見つかりません。","error"); return; }
+    const headers = rows[0].map(normHeader);
+    const idx = {};
+    headers.forEach((h,i)=>{ const key = PH_HEADER_MAP[h]; if(key && idx[key]===undefined) idx[key]=i; });
+    if(idx.name===undefined){ toast("「薬局名」の列が見つかりません。1行目の見出しをご確認ください。","error"); return; }
+    const parsed = [];
+    for(let r=1;r<rows.length;r++){
+      const row = rows[r] || [];
+      const get = k => idx[k]!==undefined ? String(row[idx[k]]==null?"":row[idx[k]]).trim() : "";
+      const name = get("name");
+      if(!name) continue;
+      parsed.push({ no:get("no"), abbr:get("abbr"), name, owner:get("owner"),
+        license:get("license"), addr:get("addr"), pin:get("pin"), lwid:get("lwid"), favorites:[] });
+    }
+    if(parsed.length===0){ toast("取り込める薬局がありませんでした。","error"); return; }
+    const replace = document.getElementById("importReplace").checked;
+    if(replace){
+      if(!(await askConfirm(`既存マスタを全て置き換えて ${parsed.length}件 を取り込みます。よろしいですか?`))) return;
+      config.pharmacies = parsed;
+      await saveConfig(); renderSettings(); renderSellerSelect();
+      toast(`${parsed.length}件を取り込みました(全置換)。`);
+    }else{
+      let added=0, updated=0;
+      parsed.forEach(np=>{
+        const ex = config.pharmacies.find(p=>p.name===np.name);
+        if(ex){
+          ["no","abbr","owner","license","addr","pin","lwid"].forEach(k=>{ if(np[k]) ex[k]=np[k]; });
+          updated++;
+        }else{ config.pharmacies.push(np); added++; }
+      });
+      await saveConfig(); renderSettings(); renderSellerSelect();
+      toast(`取込完了: 追加 ${added}件 / 更新 ${updated}件`);
+    }
+  }catch(e){
+    console.error(e); toast("取込中にエラーが発生しました。ファイル形式をご確認ください。","error");
+  }
+}
+function downloadPhTemplate(){
+  const headers = ["略番","略称","薬局名","開設者","許可番号","所在地","暗証番号","LINE WORKS ID"];
+  const sample  = ["01","本店","紅白本店薬局","紅白太郎","第12345号","東京都江東区○○1-2-3","1234","taro@kohaku"];
+  const csv = "\ufeff" + headers.join(",") + "\n" + sample.join(",") + "\n";
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "薬局マスタ_様式.csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
 function spOf(x){ return x.spec ? " "+x.spec : ""; }
 function sendNotifyRaw(uid, text){
   if(!config.notifyUrl || !uid) return false;
@@ -1683,10 +1909,10 @@ function pushNotify(toPharmacyName, text){
   sendNotifyRaw(uid, text);
 }
 function notifyBid(item, buyerName){
-  pushNotify(item.seller, `【不動在庫マーケット】\n${item.seller} 様\n「${item.name}${spOf(item)}」に ${buyerName} から譲受の申込が入りました。\nアプリで内容を確認し、承認(譲渡決定)してください。`);
+  pushNotify(item.seller, `【不動在庫マーケット】\n${phFull(item.seller)} 様\n「${item.name}${spOf(item)}」に ${phFull(buyerName)} 様 から譲受の申込が入りました。\nアプリで内容を確認し、承認(譲渡決定)してください。`);
 }
 function notifyApproved(item, buyerName){
-  pushNotify(buyerName, `【不動在庫マーケット】\n${buyerName} 様\n「${item.name}${spOf(item)}」の譲受が承認されました。\n現品と譲渡書・支払集金代行依頼書が ${item.seller} から届きます。`);
+  pushNotify(buyerName, `【不動在庫マーケット】\n${phFull(buyerName)} 様\n「${item.name}${spOf(item)}」の譲受が承認されました。\n現品と譲渡書・支払集金代行依頼書が ${phFull(item.seller)} 様 から届きます。`);
 }
 function testNotify(){
   if(!config.notifyUrl){ toast("先にGAS中継URLを入力してください。","error"); return; }
@@ -1918,6 +2144,8 @@ function applyAuth(){
   // 設定タブは管理者のみ
   const setBtn = document.querySelector('nav button[data-tab="tab-settings"]');
   if(setBtn) setBtn.style.display = isAdmin() ? "" : "none";
+  const myBtn = document.getElementById("myMenuBtn");
+  if(myBtn) myBtn.style.display = (currentUser && !isAdmin()) ? "" : "none";
   // 管理者でないのに設定タブを開いていたら出品登録へ戻す
   if(!isAdmin() && document.getElementById("tab-settings").classList.contains("active")){
     document.querySelector('nav button[data-tab="tab-register"]').click();
