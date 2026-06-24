@@ -122,6 +122,12 @@
   }
   button.danger:hover{background:#FBE7E4;border-color:var(--danger);}
   button.danger.small{padding:6px 10px;font-size:12.5px;}
+  button.bid{
+    background:#3B3FA0;color:#fff;border:none;border-radius:8px;
+    padding:8px 14px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;
+  }
+  button.bid:hover{background:#2E327F;}
+  button.bid.small{padding:6px 12px;font-size:12.5px;}
   button:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}
   button.small{padding:6px 10px;font-size:12.5px;}
 
@@ -259,6 +265,8 @@
   .favlist{display:flex;flex-wrap:wrap;gap:6px;}
   .favchip{display:inline-flex;align-items:center;gap:6px;background:#FFF1F3;border:1px solid #F2C9D1;color:#8A1F33;border-radius:14px;padding:3px 7px 3px 11px;font-size:13px;}
   .favchip button{border:none;background:#D98AA0;color:#fff;border-radius:50%;width:17px;height:17px;line-height:17px;font-size:11px;cursor:pointer;padding:0;}
+  .favchip .fav-g{font-variant-numeric:tabular-nums;letter-spacing:.3px;}
+  .favchip .fav-n{color:#7a3b4a;font-weight:600;}
   .filterbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;}
   .filterbar input{flex:1;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
   .import-box{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);}
@@ -450,7 +458,7 @@
     <div class="row">
       <div class="w-narrow">
         <label for="f-qty">数量 <span style="color:var(--beni)">*</span></label>
-        <input type="number" id="f-qty" min="1" step="1" value="1">
+        <input type="number" id="f-qty" min="0" step="any" value="1" onkeydown="if(event.key==='Enter'){event.preventDefault();registerListing(true);}">
       </div>
       <div class="w-narrow">
         <label for="f-unit">単位</label>
@@ -639,9 +647,9 @@
 
     <div class="mm-sec">
       <h3>お気に入り薬(出品通知)</h3>
-      <div class="hint" style="margin-bottom:6px;">登録した語を含む薬が新たに出品されると、LINE WORKSに通知が届きます(品名の部分一致)。通知には自局のLINE WORKS IDの登録が必要です。</div>
+      <div class="hint" style="margin-bottom:6px;">登録したGTINの薬が新たに出品されると、LINE WORKSに通知が届きます。バーコードリーダーでこの欄にスキャンするか、14桁のGTINを入力してください(GS1コードを貼り付けてもGTINを自動抽出します)。通知には自局のLINE WORKS IDの登録が必要です。</div>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-        <input type="text" id="favInput" placeholder="例: ロキソプロフェン" style="max-width:260px;" onkeydown="if(event.key==='Enter'){event.preventDefault();addFavorite();}">
+        <input type="text" id="favInput" placeholder="GTIN(14桁)/ コードをスキャン" style="max-width:300px;" onkeydown="if(event.key==='Enter'){event.preventDefault();addFavorite();}">
         <button class="primary small" onclick="addFavorite()">追加</button>
       </div>
       <div id="favList" class="favlist"></div>
@@ -1258,7 +1266,7 @@ function rateFor(m){
 function recalcPrice(){
   const box = document.getElementById("priceBox");
   const yakka = parseFloat(document.getElementById("f-yakka").value);
-  const qty = parseInt(document.getElementById("f-qty").value,10);
+  const qty = parseFloat(document.getElementById("f-qty").value);
   const expiry = document.getElementById("f-expiry").value;
   if(!expiry || isNaN(yakka) || isNaN(qty)){
     box.innerHTML = "価格は使用期限と薬価を入力すると自動計算されます。";
@@ -1307,13 +1315,13 @@ function renderSellerSelect(){
 async function registerListing(continuous){
   const name = document.getElementById("f-name").value.trim();
   const seller = document.getElementById("f-seller").value;
-  const qty = parseInt(document.getElementById("f-qty").value,10);
+  const qty = parseFloat(document.getElementById("f-qty").value);
   const yakka = parseFloat(document.getElementById("f-yakka").value);
   const expiry = document.getElementById("f-expiry").value;
   const price = parseFloat(document.getElementById("f-price").value);
   if(!name){ toast("品名を入力してください。","error"); return; }
   if(!seller){ toast("出品薬局を選択してください。","error"); return; }
-  if(isNaN(qty)||qty<1){ toast("数量を入力してください。","error"); return; }
+  if(isNaN(qty)||qty<=0){ toast("数量を入力してください。","error"); return; }
   if(isNaN(yakka)){ toast("薬価を入力してください。","error"); return; }
   if(!expiry){ toast("使用期限を入力してください。","error"); return; }
   const m = monthsLeft(expiry);
@@ -1474,18 +1482,18 @@ function renderListings(){
           <button class="danger small" onclick="rejectRequest('${x.id}')">却下</button>`;
       }
     }else if(iAmRequester){
-      actions = `<button class="ghost small" onclick="cancelRequest('${x.id}')">申込を取消</button>`;
+      actions = `<button class="ghost small" onclick="cancelRequest('${x.id}')">入札を取消</button>`;
     }else if(x.status==="requested"){
-      actions = `<span class="chip gray">商談中(他局申込)</span>`;
+      actions = `<span class="chip gray">商談中(他局入札)</span>`;
     }else{ // 他局の出品(申込可能)
-      actions = `<button class="primary small" onclick="requestItem('${x.id}')">譲り受けを申し込む</button>`;
+      actions = `<button class="bid small" onclick="requestItem('${x.id}')">🔨 入札する</button>`;
     }
 
     // 申込・承認の補足メッセージ
     let note = "";
     if(x.status==="requested"){
-      if(mine || admin) note = `<div class="req-note"><b>${esc(phName(x.buyer))}</b> から譲受の申込が入っています。譲渡決定すると譲渡書・支払集金代行依頼書が作成されます。</div>`;
-      else if(iAmRequester) note = `<div class="req-note">申込済みです。出品薬局(${esc(phFull(x.seller))})の承認をお待ちください。承認されると「譲渡記録」に表示されます。</div>`;
+      if(mine || admin) note = `<div class="req-note"><b>${esc(phName(x.buyer))}</b> から入札が入っています。譲渡決定すると譲渡書・支払集金代行依頼書が作成されます。</div>`;
+      else if(iAmRequester) note = `<div class="req-note">入札済みです。出品薬局(${esc(phFull(x.seller))})の承認をお待ちください。承認されると「譲渡記録」に表示されます。</div>`;
     }
 
     const checkbox = checkable
@@ -1539,7 +1547,7 @@ function updateBatchBar(){
   const types = new Set(items.map(actionType));
   const btn = document.getElementById("batchActionBtn");
   if(types.size===1 && types.has("request")){
-    btn.disabled = false; btn.textContent = `選択した${items.length}品を申し込む`;
+    btn.disabled = false; btn.textContent = `選択した${items.length}品に入札`;
   }else if(types.size===1 && types.has("approve")){
     btn.disabled = false; btn.textContent = `選択した${items.length}品を譲渡決定`;
   }else{
@@ -1554,7 +1562,7 @@ async function runBatch(){
   const type = [...types][0];
 
   if(type==="request"){
-    if(!(await askConfirm(`選択した${items.length}品の譲り受けを申し込みます。よろしいですか?`))) return;
+    if(!(await askConfirm(`選択した${items.length}品に入札します。よろしいですか?`))) return;
     items.forEach(x=>{ x.buyer = currentUser.pharmacy; x.status = "requested"; });
     selectedIds.clear();
     await saveListings();
@@ -1564,9 +1572,9 @@ async function runBatch(){
     Object.keys(bySeller2).forEach(seller=>{
       const list = bySeller2[seller];
       const names = list.map(x=>`「${x.name}${spOf(x)}」`).join("、");
-      pushNotify(seller, `【不動在庫マーケット】\n${phFull(seller)} 様\n${phFull(currentUser.pharmacy)} 様 から ${list.length}件の譲受申込が入りました。\n${names}\nアプリで承認してください。`);
+      pushNotify(seller, `【不動在庫マーケット】\n${phFull(seller)} 様\n${phFull(currentUser.pharmacy)} 様 から ${list.length}件の入札が入りました。\n${names}\nアプリで承認してください。`);
     });
-    toast(`${items.length}件を申し込みました。出品薬局の承認をお待ちください。`);
+    toast(`${items.length}件に入札しました。出品薬局の承認をお待ちください。`);
     return;
   }
 
@@ -1614,19 +1622,19 @@ async function requestItem(id){
   if(!item) return;
   if(!currentUser || currentUser.role!=="member"){ toast("組合員としてログインしてください。","error"); return; }
   if(item.seller===currentUser.pharmacy){ toast("自局の出品は申し込めません。","error"); return; }
-  if(!(await askConfirm(`${item.name} の譲り受けを申し込みます。よろしいですか?`))) return;
+  if(!(await askConfirm(`${item.name} に入札します。よろしいですか?`))) return;
   item.buyer = currentUser.pharmacy;
   item.status = "requested";
   await saveListings();
   renderListings();
   notifyBid(item, currentUser.pharmacy);
-  toast("申し込みました。出品薬局の承認をお待ちください。");
+  toast("入札しました。出品薬局の承認をお待ちください。");
 }
 // 譲受者が申込を取り消す
 async function cancelRequest(id){
   const item = listings.find(x=>x.id===id);
   if(!item) return;
-  if(!(await askConfirm("この申込を取り消しますか?"))) return;
+  if(!(await askConfirm("この入札を取り消しますか?"))) return;
   item.buyer = "";
   item.status = "listed";
   await saveListings();
@@ -1765,7 +1773,7 @@ function notifyNewListing(item){
     fetch(config.notifyUrl, {method:"POST", mode:"no-cors",
       headers:{"Content-Type":"text/plain;charset=utf-8"},
       body: JSON.stringify({ token: config.notifyToken||"", action:"newListing",
-        item:{ name:item.name, spec:item.spec||"", seller:phFull(item.seller) },
+        item:{ name:item.name, spec:item.spec||"", seller:phFull(item.seller), gtin:item.gtin||"" },
         sellerLwid: sp.lwid||"" })}).catch(()=>{});
   }catch(e){}
 }
@@ -1779,23 +1787,35 @@ function syncFavorites(){
         userId: p.lwid, keywords: (p.favorites||[]) })}).catch(()=>{});
   }catch(e){}
 }
+function favName(gtin){
+  const g = (config.gtinMaster && config.gtinMaster[gtin]) || null;
+  if(g && g.name) return g.name;
+  try{ const m = medisLookup(gtin); if(m && m.name) return m.name; }catch(e){}
+  return "";
+}
 function renderFavorites(){
   const wrap = document.getElementById("favList"); if(!wrap) return;
   const favs = myFavorites();
   wrap.innerHTML = favs.length
-    ? favs.map((k,i)=>`<span class="favchip">${esc(k)}<button onclick="removeFavorite(${i})" title="削除">✕</button></span>`).join("")
+    ? favs.map((g,i)=>{ const nm=favName(g); return `<span class="favchip"><span class="fav-g">${esc(g)}</span>${nm?`<span class="fav-n">${esc(nm)}</span>`:""}<button onclick="removeFavorite(${i})" title="削除">✕</button></span>`; }).join("")
     : `<span class="hint">登録なし</span>`;
 }
 function addFavorite(){
-  const el = document.getElementById("favInput"); const v = (el ? el.value : "").trim();
+  const el = document.getElementById("favInput"); let v = (el ? el.value : "").trim();
   if(!v) return;
+  // GS1コードならGTINを抽出。それ以外は数字を取り出して14桁化(13桁JANは先頭0補完)。
+  let gtin = "";
+  try{ const pr = parseGS1(v); if(pr && pr.gtin) gtin = pr.gtin; }catch(e){}
+  if(!gtin){ const d = v.replace(/\D/g,""); if(d.length===14) gtin = d; else if(d.length===13) gtin = "0"+d; }
+  if(!/^\d{14}$/.test(gtin)){ toast("GTIN(14桁)を入力するか、コードをスキャンしてください。","error"); return; }
   const p = myPharmacy();
   if(!p){ toast("薬局情報が見つかりません。","error"); return; }
   if(!Array.isArray(p.favorites)) p.favorites = [];
-  if(p.favorites.some(k=>k.toLowerCase()===v.toLowerCase())){ toast("すでに登録済みです。"); el.value=""; return; }
-  p.favorites.push(v); saveConfig(); el.value="";
+  if(p.favorites.includes(gtin)){ toast("すでに登録済みです。"); el.value=""; return; }
+  p.favorites.push(gtin); saveConfig(); el.value="";
   renderFavorites(); syncFavorites();
-  toast("お気に入りに追加しました。");
+  const nm = favName(gtin);
+  toast(nm ? `「${nm}」をお気に入りに追加しました。` : "お気に入りに追加しました。");
 }
 function removeFavorite(i){
   const p = myPharmacy();
@@ -1919,7 +1939,7 @@ function pushNotify(toPharmacyName, text){
   sendNotifyRaw(uid, text);
 }
 function notifyBid(item, buyerName){
-  pushNotify(item.seller, `【不動在庫マーケット】\n${phFull(item.seller)} 様\n「${item.name}${spOf(item)}」に ${phFull(buyerName)} 様 から譲受の申込が入りました。\nアプリで内容を確認し、承認(譲渡決定)してください。`);
+  pushNotify(item.seller, `【不動在庫マーケット】\n${phFull(item.seller)} 様\n「${item.name}${spOf(item)}」に ${phFull(buyerName)} 様 から入札が入りました。\nアプリで内容を確認し、承認(譲渡決定)してください。`);
 }
 function notifyApproved(item, buyerName){
   pushNotify(buyerName, `【不動在庫マーケット】\n${phFull(buyerName)} 様\n「${item.name}${spOf(item)}」の譲受が承認されました。\n現品と譲渡書・支払集金代行依頼書が ${phFull(item.seller)} 様 から届きます。`);
