@@ -116,6 +116,12 @@
     padding:8px 14px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;
   }
   button.ghost:hover{border-color:var(--beni);color:var(--beni);}
+  button.danger{
+    background:#fff;color:var(--danger);border:1px solid #E7B6AE;border-radius:8px;
+    padding:8px 14px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;
+  }
+  button.danger:hover{background:#FBE7E4;border-color:var(--danger);}
+  button.danger.small{padding:6px 10px;font-size:12.5px;}
   button:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}
   button.small{padding:6px 10px;font-size:12.5px;}
 
@@ -166,7 +172,11 @@
     padding:14px 16px;margin-bottom:12px;
   }
   .listing .top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;}
-  .listing .name{font-size:15.5px;font-weight:700;}
+  .listing .name{
+    font-size:15.5px;font-weight:700;color:var(--ink);
+    background:#FCEAEE;border-left:4px solid var(--beni);
+    padding:6px 10px;border-radius:5px;
+  }
   .listing .meta{font-size:13px;color:var(--ink-soft);margin-top:2px;}
   .listing .memo-note{display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 10px;
     background:#FFF6E9;border:1px solid #F0D9AE;border-left:4px solid #E0A33B;border-radius:6px;}
@@ -1450,18 +1460,18 @@ function renderListings(){
           .map(p=>`<option value="${esc(p.name)}">${esc(phLabel(p))}</option>`).join("");
         actions = `<select id="buyer-${x.id}"><option value="">譲受薬局を選択</option>${buyerOpts}</select>
           <button class="primary small" onclick="decideTransfer('${x.id}')">譲渡決定</button>
-          <button class="ghost small" onclick="cancelListing('${x.id}')">取下げ</button>`;
+          <button class="danger small" onclick="cancelListing('${x.id}')">取下げ</button>`;
       }else{ // requested
         actions = `<button class="primary small" onclick="decideTransfer('${x.id}')">譲渡決定(承認)</button>
-          <button class="ghost small" onclick="rejectRequest('${x.id}')">却下</button>`;
+          <button class="danger small" onclick="rejectRequest('${x.id}')">却下</button>`;
       }
     }else if(mine){
       if(x.status==="listed"){
         actions = `<span class="chip gray">自局の出品</span>
-          <button class="ghost small" onclick="cancelListing('${x.id}')">取下げ</button>`;
+          <button class="danger small" onclick="cancelListing('${x.id}')">取下げ</button>`;
       }else{ // 自局への申込あり → 出品者が承認・印刷
         actions = `<button class="primary small" onclick="decideTransfer('${x.id}')">譲渡決定して印刷</button>
-          <button class="ghost small" onclick="rejectRequest('${x.id}')">却下</button>`;
+          <button class="danger small" onclick="rejectRequest('${x.id}')">却下</button>`;
       }
     }else if(iAmRequester){
       actions = `<button class="ghost small" onclick="cancelRequest('${x.id}')">申込を取消</button>`;
@@ -1475,7 +1485,7 @@ function renderListings(){
     let note = "";
     if(x.status==="requested"){
       if(mine || admin) note = `<div class="req-note"><b>${esc(phName(x.buyer))}</b> から譲受の申込が入っています。譲渡決定すると譲渡書・支払集金代行依頼書が作成されます。</div>`;
-      else if(iAmRequester) note = `<div class="req-note">申込済みです。出品薬局(${esc(phName(x.seller))})の承認をお待ちください。承認されると「譲渡記録」に表示されます。</div>`;
+      else if(iAmRequester) note = `<div class="req-note">申込済みです。出品薬局(${esc(phFull(x.seller))})の承認をお待ちください。承認されると「譲渡記録」に表示されます。</div>`;
     }
 
     const checkbox = checkable
@@ -1488,7 +1498,7 @@ function renderListings(){
         <div class="top">
           <div>
             <div class="name">${esc(x.name)} <span style="font-weight:400;font-size:13px;color:var(--ink-soft)">${esc(x.spec)}</span></div>
-            <div class="meta">出品: ${esc(phName(x.seller))}(${fmtDate(x.createdAt)})</div>
+            <div class="meta">出品: ${esc(phFull(x.seller))}(${fmtDate(x.createdAt)})</div>
           </div>
           <div>${statusChip}${urgencyChip(m)}</div>
         </div>
