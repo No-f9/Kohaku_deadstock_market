@@ -267,6 +267,7 @@
   .favchip button{border:none;background:#D98AA0;color:#fff;border-radius:50%;width:17px;height:17px;line-height:17px;font-size:11px;cursor:pointer;padding:0;}
   .favchip .fav-g{font-variant-numeric:tabular-nums;letter-spacing:.3px;}
   .favchip .fav-n{color:#7a3b4a;font-weight:600;}
+  .favwarn{margin-top:8px;font-size:12.5px;color:var(--danger);background:#FBE7E4;border:1px solid #E7B6AE;border-radius:6px;padding:6px 10px;}
   .filterbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;}
   .filterbar input{flex:1;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
   .import-box{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);}
@@ -653,6 +654,8 @@
         <button class="primary small" onclick="addFavorite()">追加</button>
       </div>
       <div id="favList" class="favlist"></div>
+      <div id="favWarn" class="favwarn" style="display:none;">⚠ 自局のLINE WORKS IDが未登録のため、通知は届きません。管理者にID登録をご依頼ください。</div>
+      <div style="margin-top:8px;"><button class="ghost small" onclick="resyncFavorites()">通知サーバへ今すぐ同期</button></div>
     </div>
   </div>
 </div>
@@ -1787,6 +1790,13 @@ function syncFavorites(){
         userId: p.lwid, keywords: (p.favorites||[]) })}).catch(()=>{});
   }catch(e){}
 }
+function resyncFavorites(){
+  const p = myPharmacy();
+  if(!config.notifyOn || !config.notifyUrl){ toast("先に管理者がLINE WORKS通知を有効にする必要があります。","error"); return; }
+  if(!p || !p.lwid){ toast("自局のLINE WORKS IDが未登録です。管理者にご依頼ください。","error"); return; }
+  syncFavorites();
+  toast("お気に入りを通知サーバへ同期しました。");
+}
 function favName(gtin){
   const g = (config.gtinMaster && config.gtinMaster[gtin]) || null;
   if(g && g.name) return g.name;
@@ -1831,6 +1841,9 @@ function openMyMenu(){
   const pin = document.getElementById("myPinInput"); if(pin) pin.value = p.pin||"";
   const fi = document.getElementById("favInput"); if(fi) fi.value = "";
   renderFavorites();
+  const warn = document.getElementById("favWarn");
+  if(warn) warn.style.display = (p.lwid ? "none" : "block");
+  syncFavorites(); // 最新のお気に入りを通知サーバへ反映
   document.getElementById("memberBg").classList.add("show");
 }
 function closeMyMenu(){ document.getElementById("memberBg").classList.remove("show"); }
