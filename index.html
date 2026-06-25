@@ -194,6 +194,7 @@
     gap:6px 14px;margin:10px 0;font-size:13.5px;
   }
   .listing .grid b{display:block;font-size:11.5px;color:var(--ink-soft);font-weight:600;}
+  .listing .rate-badge{display:inline-block;margin-left:6px;font-size:12.5px;font-weight:700;color:var(--beni);background:#FCEAEE;border:1px solid #F2C9D1;border-radius:10px;padding:1px 9px;vertical-align:middle;}
   .chip{
     display:inline-block;padding:2px 10px;border-radius:999px;
     font-size:12px;font-weight:700;white-space:nowrap;
@@ -504,7 +505,7 @@
 <!-- ============ 出品リスト ============ -->
 <section id="tab-list" class="tab">
   <div class="notice">
-    譲受したい薬局は品目の<b>「譲り受けを申し込む」</b>(チェックで複数選択も可)を押します。出品薬局側に「承認待ち」として表示され、出品薬局が<b>「譲渡決定」</b>を押すと譲渡書・支払集金代行依頼書が作成されます。
+    譲受したい薬局は品目の<b>「🔨 入札する」</b>(チェックで複数選択も可)を押します。出品薬局側に「承認待ち」として表示され、出品薬局が<b>「譲渡決定」</b>を押すと譲渡書・支払集金代行依頼書が作成されます。
   </div>
   <div class="filterbar">
     <input type="text" id="listFilter" placeholder="🔍 品名・略称で絞り込み(部分一致)" oninput="onFilterInput()" autocomplete="off">
@@ -1518,7 +1519,7 @@ function renderListings(){
           <div><b>使用期限</b>${fmtDate(x.expiry)}</div>
           <div><b>ロット</b>${esc(x.lot)||"−"}</div>
           <div><b>数量</b>${x.qty} ${esc(x.unit)}</div>
-          <div><b>譲渡価格</b><span style="font-weight:800;color:var(--beni)">${x.price.toLocaleString()}円</span>${x.rate?`<span style="font-size:11px;color:var(--ink-soft)">(薬価×${x.rate}%)</span>`:""}</div>
+          <div><b>譲渡価格</b><span style="font-weight:800;color:var(--beni)">${x.price.toLocaleString()}円</span>${x.rate?`<span class="rate-badge">薬価×${x.rate}%</span>`:""}</div>
         </div>
         ${note}
         <div class="actions">${actions}</div>
@@ -1722,8 +1723,8 @@ function renderHistory(){
     return `<div class="listing">
       <div class="top">
         <div>
-          <div class="name">${esc(phName(x0.seller))} → ${esc(phName(x0.buyer))}</div>
-          <div class="meta">譲渡決定日: ${fmtDate(x0.decidedAt)} / ${g.length}品目 / 合計 <b>${total.toLocaleString()}円</b>(組合手数料5% = 各${fee.toLocaleString()}円)</div>
+          <div class="name">${esc(phFull(x0.seller))} → ${esc(phFull(x0.buyer))}</div>
+          <div class="meta">譲渡決定日: ${fmtDate(x0.decidedAt)} / ${g.length}品目 / 合計 <b>${total.toLocaleString()}円</b></div>
         </div>
         <div><span class="chip approved">承認済み</span></div>
       </div>
@@ -2047,7 +2048,7 @@ function showDocGroup(key){
         <div class="line"><b>略称</b><span>${esc(seller.abbr||seller.name||x0.seller)}</span></div>
       </div>
     </div>
-    <div class="daiko-fee">※手数料は売主・買主双方から取引金額の5%をいただきます<span style="margin-left:1em;color:#555;">(参考: 取引金額 ${total.toLocaleString()}円 × 5% ＝ 各 ${fee.toLocaleString()}円)</span></div>
+    <div class="daiko-fee">※手数料は売主・買主双方から取引金額の5%をいただきます。</div>
     <div class="daiko-office">
       <div>令和　　年　　月　　日　紅白会本部受付済</div>
       <div>令和　　年　　月　　日締め請求分　紅白会経理部処理</div>
