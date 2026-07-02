@@ -500,6 +500,20 @@
     <button class="primary" onclick="registerListing(false)">この内容で出品する</button>
     <button class="ghost" onclick="registerListing(true)" style="margin-left:8px;">続けて出品する(次をスキャン)</button>
   </div>
+
+  <div class="card">
+    <h2>Excel / CSV から一括出品</h2>
+    <div class="hint" style="margin-bottom:8px;">
+      1行目に見出しを置いてください: <b>品名(必須) / 規格 / GTIN / ロット / 使用期限(必須) / 数量(必須) / 単位 / 薬価 / 譲渡価格 / 備考</b>。
+      使用期限は「2027/08/31」「2027-08-31」「202708(月末扱い)」のいずれでも読めます。
+      薬価が空欄でもGTINがあればマスタから自動補完します。譲渡価格が空欄なら期限ルールで自動計算します。
+      出品薬局はログイン中の薬局になります<span id="impSellerNote"></span>。
+    </div>
+    <input type="file" id="listImportFile" accept=".xlsx,.xls,.csv" style="display:none;" onchange="importListings(event)">
+    <button class="ghost small" onclick="document.getElementById('listImportFile').click()">📥 ファイルから一括出品</button>
+    <button class="ghost small" onclick="downloadListTemplate()">様式をダウンロード</button>
+    <div id="impResult" class="hint" style="margin-top:8px;"></div>
+  </div>
 </section>
 
 <!-- ============ 出品リスト ============ -->
@@ -615,6 +629,17 @@
       <div style="flex:0 0 auto;"><button class="ghost" onclick="testNotify()">テスト送信</button></div>
     </div>
     <div style="margin-top:12px;"><button class="primary" onclick="saveSettings()">設定を保存</button></div>
+  </div>
+
+  <div class="card">
+    <h2>データのバックアップ・復元</h2>
+    <div class="hint" style="margin-bottom:10px;">薬局マスタ・出品・譲渡記録・各種設定をまとめてファイルに書き出し/読み込みできます。<b>定期的にバックアップを保存</b>しておくと、端末の不具合・買い替えやデータ消失時に復元できます。バージョンアップ(index.html の差し替え)では原則データは消えませんが、念のため作業前のバックアップを推奨します。</div>
+    <div class="row" style="gap:10px;align-items:center;">
+      <button class="primary" onclick="exportBackup()">⬇ バックアップを書き出す</button>
+      <input type="file" id="backupFile" accept=".json,application/json" style="display:none;" onchange="importBackup(event)">
+      <button class="ghost" onclick="document.getElementById('backupFile').click()">⬆ バックアップから復元</button>
+    </div>
+    <div class="hint" style="margin-top:8px;color:var(--danger);">※「復元」は現在のデータをすべて置き換えます。実行前に、まず現在のデータを書き出して保管することをおすすめします。</div>
   </div>
 </section>
 
@@ -1798,6 +1823,38 @@ function resyncFavorites(){
   syncFavorites();
   toast("お気に入りを通知サーバへ同期しました。");
 }
+
+/* ===== データのバックアップ・復元 ===== */
+function exportBackup(){
+  try{
+    const data = { app:"kohaku-deadstock-market", schema:1, savedAt:new Date().toISOString(), config, listings };
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+    const d = new Date(); const pad=n=>String(n).padStart(2,"0");
+    const fn = `紅白会_不動在庫_バックアップ_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=fn;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href);
+    toast("バックアップを書き出しました。安全な場所に保管してください。");
+  }catch(e){ console.error(e); toast("書き出しに失敗しました。","error"); }
+}
+async function importBackup(ev){
+  const file = ev.target.files && ev.target.files[0];
+  ev.target.value = "";
+  if(!file) return;
+  let data;
+  try{ data = JSON.parse(await file.text()); }
+  catch(e){ toast("ファイルを読み込めませんでした(JSON形式が不正です)。","error"); return; }
+  if(!data || typeof data.config!=="object" || !Array.isArray(data.listings)){
+    toast("バックアップファイルの形式が正しくありません。","error"); return;
+  }
+  const when = data.savedAt ? `\n(作成: ${data.savedAt})` : "";
+  if(!(await askConfirm(`現在のデータを、このバックアップで置き換えます。${when}\n薬局・出品・譲渡記録・設定がすべて上書きされます。よろしいですか?`))) return;
+  config = data.config;
+  listings = data.listings;
+  if(typeof init==="function") init();   // 不足項目の補完(スキーマ移行)＋全画面再描画
+  scheduleSave();                         // 保存
+  if(typeof applyAuth==="function") applyAuth();
+  toast("バックアップから復元しました。");
+}
 function favName(gtin){
   const g = (config.gtinMaster && config.gtinMaster[gtin]) || null;
   if(g && g.name) return g.name;
@@ -1866,6 +1923,40 @@ function loadSheetJS(){
     document.head.appendChild(s);
   });
 }
+/* ===== 表ファイル読み込み共通(CSVは内蔵・ExcelはSheetJS) ===== */
+function parseCsvText(text){
+  if(text.charCodeAt(0)===0xFEFF) text=text.slice(1);
+  const rows=[]; let row=[], cur="", inQ=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(inQ){
+      if(c==='"'){ if(text[i+1]==='"'){ cur+='"'; i++; } else inQ=false; }
+      else cur+=c;
+    }else{
+      if(c==='"') inQ=true;
+      else if(c===',' ){ row.push(cur); cur=""; }
+      else if(c==='\n'){ row.push(cur); rows.push(row); row=[]; cur=""; }
+      else if(c==='\r'){ /* skip */ }
+      else cur+=c;
+    }
+  }
+  if(cur!=="" || row.length){ row.push(cur); rows.push(row); }
+  return rows.filter(r=>r.some(c=>String(c).trim()!==""));
+}
+async function readTableFile(file){
+  const isCsv = /\.csv$/i.test(file.name);
+  if(isCsv){
+    // CSVはライブラリ不要(オフラインでも可)
+    const buf = await file.arrayBuffer();
+    let text;
+    try{ text = new TextDecoder("utf-8",{fatal:true}).decode(buf); }
+    catch(e){ text = new TextDecoder("shift_jis").decode(buf); } // Excel保存のCSV(SJIS)にも対応
+    return parseCsvText(text);
+  }
+  const XLSX = await loadSheetJS(); // Excelはライブラリ必要(要ネット接続・初回のみ)
+  const wb = XLSX.read(await file.arrayBuffer(), {type:"array"});
+  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, blankrows:false, defval:""});
+}
 const PH_HEADER_MAP = {
   "略番":"no","no":"no",
   "略称":"abbr","abbr":"abbr",
@@ -1881,14 +1972,10 @@ async function importPharmacies(ev){
   const file = ev.target.files && ev.target.files[0];
   ev.target.value = "";
   if(!file) return;
-  let XLSX;
-  try{ XLSX = await loadSheetJS(); }
-  catch(e){ toast("取込ライブラリを読み込めませんでした。ネット接続をご確認ください。","error"); return; }
+  let rows;
+  try{ rows = await readTableFile(file); }
+  catch(e){ toast("Excelの読込には初回のみネット接続が必要です。CSV形式ならオフラインでも取り込めます。","error"); return; }
   try{
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, {type:"array"});
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, {header:1, blankrows:false, defval:""});
     if(rows.length < 2){ toast("データ行が見つかりません。","error"); return; }
     const headers = rows[0].map(normHeader);
     const idx = {};
@@ -1925,6 +2012,127 @@ async function importPharmacies(ev){
   }catch(e){
     console.error(e); toast("取込中にエラーが発生しました。ファイル形式をご確認ください。","error");
   }
+}
+/* ===== 出品の Excel/CSV 一括取込 ===== */
+const LIST_HEADER_MAP = {
+  "品名":"name","医薬品名":"name","name":"name",
+  "規格":"spec","規格包装":"spec","規格・包装":"spec","spec":"spec",
+  "gtin":"gtin","jan":"gtin","コード":"gtin","gtinコード":"gtin",
+  "ロット":"lot","ロット番号":"lot","製造番号":"lot","lot":"lot",
+  "使用期限":"expiry","期限":"expiry","expiry":"expiry",
+  "数量":"qty","qty":"qty",
+  "単位":"unit","unit":"unit",
+  "薬価":"yakka","yakka":"yakka",
+  "譲渡価格":"price","価格":"price","price":"price",
+  "備考":"memo","コメント":"memo","memo":"memo"
+};
+function normExpiry(v){
+  if(v==null || v==="") return "";
+  if(typeof v==="number" && isFinite(v)){ // Excelシリアル値
+    const ms = Math.round((v - 25569) * 86400 * 1000);
+    const d = new Date(ms);
+    if(isNaN(d)) return "";
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")}`;
+  }
+  let s = String(v).trim().replace(/[.\u5e74\u6708]/g,"/").replace(/\u65e5/g,"").replace(/-/g,"/");
+  const d8 = s.replace(/\D/g,"");
+  if(/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(s)){
+    const [y,m,dd]=s.split("/").map(Number);
+    return `${y}-${String(m).padStart(2,"0")}-${String(dd).padStart(2,"0")}`;
+  }
+  if(/^\d{4}\/\d{1,2}$/.test(s) || /^\d{6}$/.test(d8)){ // 年月のみ → 月末
+    const y = Number(/^\d{6}$/.test(d8) ? d8.slice(0,4) : s.split("/")[0]);
+    const m = Number(/^\d{6}$/.test(d8) ? d8.slice(4,6) : s.split("/")[1]);
+    if(m>=1 && m<=12){ const last=new Date(y, m, 0).getDate(); return `${y}-${String(m).padStart(2,"0")}-${String(last).padStart(2,"0")}`; }
+    return "";
+  }
+  if(/^\d{8}$/.test(d8)){ return `${d8.slice(0,4)}-${d8.slice(4,6)}-${d8.slice(6,8)}`; }
+  return "";
+}
+function normGtin(v){
+  const d = String(v==null?"":v).replace(/\D/g,"");
+  if(d.length===14) return d;
+  if(d.length===13) return "0"+d;
+  return "";
+}
+async function importListings(ev){
+  const file = ev.target.files && ev.target.files[0];
+  ev.target.value = "";
+  if(!file) return;
+  if(!currentUser || !currentUser.pharmacy){ toast("組合員としてログインしてください。","error"); return; }
+  const resBox = document.getElementById("impResult");
+  let rows;
+  try{ rows = await readTableFile(file); }
+  catch(e){ toast("Excelの読込には初回のみネット接続が必要です。CSV形式ならオフラインでも取り込めます。","error"); return; }
+  try{
+    if(rows.length < 2){ toast("データ行が見つかりません。","error"); return; }
+    const headers = rows[0].map(normHeader);
+    const idx = {};
+    headers.forEach((h,i)=>{ const k=LIST_HEADER_MAP[h]; if(k && idx[k]===undefined) idx[k]=i; });
+    for(const req of ["name","expiry","qty"]){
+      if(idx[req]===undefined){
+        toast(`必須の列「${req==="name"?"品名":req==="expiry"?"使用期限":"数量"}」が見つかりません。1行目の見出しをご確認ください。`,"error"); return;
+      }
+    }
+    const seller = currentUser.pharmacy;
+    const ok=[], ng=[];
+    for(let r=1;r<rows.length;r++){
+      const row=rows[r]||[];
+      const get=k=> idx[k]!==undefined ? row[idx[k]] : "";
+      const name=String(get("name")||"").trim();
+      if(!name){ continue; } // 完全空行等はスキップ(エラー扱いにしない)
+      const expiry=normExpiry(get("expiry"));
+      const qty=parseFloat(get("qty"));
+      const gtin=normGtin(get("gtin"));
+      let spec=String(get("spec")||"").trim();
+      let yakka=parseFloat(get("yakka"));
+      const unit=String(get("unit")||"").trim()||"個";
+      const memo=String(get("memo")||"").trim();
+      let priceIn=parseFloat(get("price"));
+      // 薬価の自動補完(GTIN→学習マスタ→薬価マスタ)
+      if(isNaN(yakka) && gtin){
+        const g=config.gtinMaster[gtin];
+        if(g && g.yakka) yakka=parseFloat(g.yakka);
+        if(isNaN(yakka)){ const y=yakkaLookup(gtin); if(y!=null) yakka=parseFloat(y); }
+        if(!spec){ const m=medisLookup(gtin); if(m&&m.spec) spec=m.spec; }
+      }
+      if(!expiry){ ng.push(`${r+1}行目: 使用期限を読み取れません`); continue; }
+      const m=monthsLeft(expiry);
+      if(m<0){ ng.push(`${r+1}行目: 使用期限切れ(${expiry})`); continue; }
+      if(isNaN(qty)||qty<=0){ ng.push(`${r+1}行目: 数量が不正`); continue; }
+      if(isNaN(yakka)){ ng.push(`${r+1}行目: 薬価が空欄でマスタからも補完できません`); continue; }
+      let rate=rateFor(m); let price;
+      if(!isNaN(priceIn)){ price=Math.round(priceIn); if(yakka>0&&qty>0) rate=Math.round(price/(yakka*qty)*100); }
+      else{
+        if(rate==null){ ng.push(`${r+1}行目: 期限が短くルール外のため譲渡価格を指定してください`); continue; }
+        price=Math.round(yakka*qty*rate/100);
+      }
+      const item={ id:Date.now()+"-"+r+"-"+Math.floor(Math.random()*1000), gtin, name, spec,
+        lot:String(get("lot")||"").trim(), expiry, qty, unit, yakka, rate, monthsLeft:m,
+        price, seller, buyer:"", memo, status:"listed", createdAt:todayStr(), decidedAt:"", no:"" };
+      ok.push(item);
+    }
+    if(ok.length===0){
+      resBox.innerHTML = "取り込める行がありませんでした。" + (ng.length?`<br>`+ng.slice(0,10).map(esc).join("<br>"):"");
+      toast("取り込める出品がありませんでした。","error"); return;
+    }
+    if(!(await askConfirm(`${ok.length}件を「${seller}」の出品として登録します。よろしいですか?`+(ng.length?`\n(読み飛ばし ${ng.length}件あり)`:"")))) return;
+    ok.forEach(x=>{ listings.unshift(x); if(x.gtin){ config.gtinMaster[x.gtin]={name:x.name,spec:x.spec,yakka:x.yakka,unit:x.unit}; } });
+    saveConfig();
+    await saveListings();
+    ok.forEach(x=>notifyNewListing(x));
+    renderListings();
+    resBox.innerHTML = `取込完了: <b>${ok.length}件</b> を出品しました。` + (ng.length?`<br>読み飛ばし ${ng.length}件:<br>`+ng.slice(0,10).map(esc).join("<br>")+(ng.length>10?"<br>…":""):"");
+    toast(`${ok.length}件を出品しました。`);
+  }catch(e){ console.error(e); toast("取込中にエラーが発生しました。ファイル形式をご確認ください。","error"); }
+}
+function downloadListTemplate(){
+  const headers=["品名","規格","GTIN","ロット","使用期限","数量","単位","薬価","譲渡価格","備考"];
+  const sample=["アムロジピンOD錠5mg「ケンエー」","5mg100錠","04987654321098","AB123","2027/08/31","50","錠","10.1","","未開封"];
+  const csv="\ufeff"+headers.join(",")+"\n"+sample.join(",")+"\n";
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="出品一括登録_様式.csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href);
 }
 function downloadPhTemplate(){
   const headers = ["略番","略称","薬局名","開設者","許可番号","所在地","暗証番号","LINE WORKS ID"];
